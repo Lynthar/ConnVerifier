@@ -74,7 +74,7 @@ type Stats struct {
 }
 
 func main() {
-	addr := flag.String("addr", "106.54.162.98:9000", "server address")
+	addr := flag.String("addr", "127.0.0.1:9000", "server address")
 	clients := flag.Int("clients", 1000, "target number of concurrent connections")
 	startRate := flag.Int("start-rate", 100, "max new connections started per second")
 	heartbeat := flag.Duration("heartbeat", 30*time.Second, "heartbeat interval (PING every N seconds)")
