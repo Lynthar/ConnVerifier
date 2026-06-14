@@ -1,56 +1,109 @@
 # ConnVerifier / 连接稳定性验证工具
 
-ConnVerifier is a Go-based TCP keepalive stress tool that tests whether a client behind carrier NAT can keep a configurable number of concurrent TCP sessions alive with a cloud echo endpoint.
+ConnVerifier is a Go-based TCP connection stability tester. It verifies whether a client behind NAT or carrier-grade NAT can keep a configurable number of concurrent TCP sessions alive with a public echo endpoint.
 
-ConnVerifier 是一个基于 Go 的 TCP Keepalive 压测工具，用于验证运营商级 NAT 后的客户端能否维持可配置数量的并发 TCP 会话与云端回声服务持续通信。
+ConnVerifier 是一个基于 Go 的 TCP 连接稳定性验证工具，用于测试 NAT 或运营商级 NAT 后的客户端能否长期维持大量到云端回声服务的 TCP 连接。
+
+The client uses both application-level heartbeats (`PING` echoed by the server) and optional OS TCP keepalive. Application heartbeats provide measurable acknowledgments; TCP keepalive helps the kernel detect broken idle connections.
+
+客户端同时支持应用层心跳和可选的系统 TCP keepalive。应用层心跳用于统计可确认的回包；TCP keepalive 用于帮助内核发现异常空闲连接。
 
 ## Components / 组成部分
 
-- `server.go`：Minimal echo server that listens on a configurable TCP port, accepts client sockets, and immediately echoes back inbound bytes without closing connections—ideal for validating PING/PONG heartbeats.
-- `server.go`：一个最简回声服务器，监听可配置端口，接受客户端后直接回写收到的字节，不主动断开连接，便于验证 PING/PONG 心跳。
-- `client.go`：Launches configurable goroutines, each maintaining a TCP connection with periodic heartbeats, exponential-backoff reconnects, and per-second stats. Dialing is rate-limited to avoid exhausting bandwidth/file descriptors.
-- `client.go`：启动多个可配置的 Goroutine，每个维持一个 TCP 连接，定期心跳、遇断自动指数退避重连，并输出每秒统计；拨号行为带速率限制，防止带宽或文件描述符耗尽。
+- `cmd/server`: TCP echo server. It listens on a configurable address, echoes inbound bytes, supports idle timeouts, TCP keepalive, and a maximum concurrent connection limit.
+- `cmd/client`: TCP stability client. It maintains a target number of concurrent connections, sends periodic heartbeats, validates heartbeat acknowledgments, reconnects with exponential backoff, and prints per-second stats.
+
+## Build / 编译
+
+```bash
+go build -o bin/connverifier-server ./cmd/server
+go build -o bin/connverifier-client ./cmd/client
+```
+
+Run checks:
+
+```bash
+go test ./...
+go vet ./...
+```
 
 ## Usage / 使用方式
 
-1. Build the binaries / 编译可执行文件：
-   ```bash
-   go build server.go   # produces ./server / 生成 ./server
-   go build client.go   # produces ./client / 生成 ./client
-   ```
+Start the echo server on a public VM:
 
-2. Start the echo server on a public cloud VM / 在云端 VM 上启动回声服务：
-   ```bash
-   ./server -addr :9000
-   ```
+```bash
+./bin/connverifier-server \
+  -addr :9000 \
+  -max-conns 10000 \
+  -idle-timeout 2m \
+  -tcp-keepalive 30s
+```
 
-3. Run the local client (tune flags per environment) / 在本地运行客户端（根据实际环境调整参数）：
-   ```bash
-   ./client \
-     -addr <server-ip>:9000 \
-     -clients 10000 \
-     -start-rate 500 \
-     -heartbeat 30s \
-     -min-backoff 500ms \
-     -max-backoff 1m
-   ```
+Run the local client:
+
+```bash
+./bin/connverifier-client \
+  -addr <server-ip>:9000 \
+  -clients 10000 \
+  -start-rate 500 \
+  -heartbeat 30s \
+  -dial-timeout 5s \
+  -io-timeout 5s \
+  -min-backoff 500ms \
+  -max-backoff 1m \
+  -tcp-keepalive 30s
+```
 
 ## Client Flags / 客户端参数
 
-- `-addr`：Target server address (默认 `127.0.0.1:9000`)，指定服务器地址。
-- `-clients`：Goal for concurrent connections to maintain（目标并发连接数），客户端会持续补足。
-- `-start-rate`：Maximum number of new connections (initial or reconnect) launched per second（每秒最大新连接数，含重连）。
-- `-heartbeat`：Interval between each PING heartbeat（心跳间隔）。
-- `-dial-timeout`, `-io-timeout`：拨号与 IO 操作的超时时间。
-- `-min-backoff`, `-max-backoff`：指数退避策略的最小/最大间隔，控制重连节奏。
+- `-addr`: target server address. Default: `127.0.0.1:9000`.
+- `-clients`: target number of concurrent connections. Must be between `1` and `1000000`.
+- `-start-rate`: maximum new connection attempts per second. Must be between `1` and `100000`.
+- `-heartbeat`: interval between application-level `PING` heartbeats. Must be positive.
+- `-dial-timeout`: TCP dial timeout. Must be positive.
+- `-io-timeout`: deadline applied independently to each heartbeat write and read. Must be positive.
+- `-min-backoff`: initial retry backoff. Must be positive.
+- `-max-backoff`: maximum retry backoff. Must be greater than or equal to `-min-backoff`. Actual reconnect waits are randomized with equal jitter (each wait is a random value in `[delay/2, delay]`) to desynchronize reconnect waves after a mass drop.
+- `-tcp-keepalive`: TCP keepalive probe interval. Set `<=0` to disable OS TCP keepalive.
+- `-log-drops`: log every connection drop with its reason. Disabled by default to avoid log pressure during large tests; drop counts are always summarized in the per-second stats.
 
-The client prints per-second stats covering active connections, total dial attempts, dropouts, reconnect attempts, and heartbeat acknowledgments—giving you real-time stability feedback without noisy per-disconnection logs.
+The client prints per-second stats:
 
-客户端会每秒输出活跃连接数、总拨号数、掉线次数、重连次数与心跳确认数，提供实时的稳定性反馈，无需打印每次断线细节。
+- `target`: requested concurrent connection count.
+- `active`: currently active TCP connections.
+- `dial_attempts`: total dial attempts.
+- `connected`: successful TCP connections.
+- `dial_errors`: failed dial attempts.
+- `drops`: established connections that later failed (sum of `drop_timeout`, `drop_closed`, `drop_error`, and `bad_ack`).
+- `drop_timeout`: drops where a heartbeat exceeded `-io-timeout`, i.e. no reply arrived in time (often a silent NAT/middlebox drop).
+- `drop_closed`: drops where the peer closed the connection (EOF/FIN).
+- `drop_error`: drops from connection resets and other I/O errors.
+- `heartbeats`: application heartbeats sent.
+- `ack`: validated heartbeat acknowledgments.
+- `bad_ack`: heartbeat responses that did not match `PING`.
+- `retries`: scheduled retry attempts after dial failures or connection drops.
+- `rtt_samples`: successful heartbeat round-trips measured during the last interval (the sample count behind the percentiles; low values mean the percentiles are noisy).
+- `rtt_p50` / `rtt_p95` / `rtt_p99`: application-level heartbeat round-trip latency percentiles for the last interval. Measured only on successful heartbeats (failed or timed-out ones are counted under `drops`/`drop_timeout` instead). Percentiles are histogram-bucketed with ~10% resolution and reset every interval, so they reflect current latency rather than the whole run.
+
+## Server Flags / 服务端参数
+
+- `-addr`: TCP listen address. Default: `:9000`.
+- `-max-conns`: maximum concurrent connections. Default: `10000`; set `<=0` for unlimited.
+- `-idle-timeout`: idle timeout per connection. Default: `2m`; set `<=0` to disable.
+- `-tcp-keepalive`: TCP keepalive probe interval. Default: `30s`; set `<=0` to disable.
+- `-log-connections`: log every per-connection event (open, close-with-reason, and rejection). Disabled by default to avoid log pressure during large tests; aggregate counts are always reported in the per-second stats line.
+
+The server prints per-second stats and shuts down cleanly on `SIGINT`/`SIGTERM` (it stops accepting and logs a final summary):
+
+- `active`: currently open connections.
+- `accepted`: total connections accepted (i.e. that passed the `-max-conns` limit).
+- `rejected`: total connections refused because `-max-conns` was reached.
+- `closed`: total connections that have since finished.
 
 ## Recommendations / 建议
 
-- Raise `ulimit -n` before running the client so the OS permits 10k+ sockets.
-- 运行客户端前请先提升 `ulimit -n`，确保系统支持 1 万条以上 socket。
-- Smoothly ramp the load via `-start-rate` to avoid triggering cloud provider DDoS protections.
-- 通过 `-start-rate` 控制每秒新连接量，平滑开启，避免触发云厂商的防护策略。
+- Raise `ulimit -n` on both client and server before testing 10k+ sockets.
+- Use `-start-rate` to ramp up gradually and avoid triggering provider anti-DDoS systems.
+- Do not expose the server broadly on the public internet. Prefer firewall rules that only allow known test client IPs.
+- Keep `-max-conns` and `-idle-timeout` enabled for public VM tests.
+- Treat this as a controlled diagnostics tool, not a general-purpose public echo service.
