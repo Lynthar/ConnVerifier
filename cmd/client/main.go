@@ -412,10 +412,9 @@ func writeFull(conn net.Conn, data []byte) error {
 	return nil
 }
 
-// recordDropReason buckets a dropped connection's error so the periodic stats
-// line attributes it instead of discarding it. The buckets partition dropouts:
-// timeouts (likely silent NAT/middlebox drops), closed (peer sent EOF/FIN),
-// and errors (resets and everything else); bad acks are already counted.
+// recordDropReason buckets a dropped connection's error for the stats line.
+// The buckets partition dropouts: timeout (likely silent NAT/middlebox drop),
+// closed (peer EOF/FIN), error (resets and the rest); bad acks pre-counted.
 func recordDropReason(err error, stats *Stats) {
 	switch {
 	case err == nil:
@@ -436,9 +435,8 @@ func isTimeout(err error) bool {
 	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
-// jitter applies equal jitter to a reconnect delay, returning a random duration
-// in [d/2, d]. Spreading the waits desynchronizes the reconnect waves that follow
-// a mass drop (e.g. a server restart), smoothing load spikes. The caller keeps
+// jitter returns a random duration in [d/2, d] (equal jitter): spread-out waits
+// desynchronize the reconnect wave after a mass drop. Callers must keep
 // slot.backoff itself un-jittered so the exponential progression stays clean.
 func jitter(d time.Duration) time.Duration {
 	if d <= 0 {
@@ -459,12 +457,9 @@ func increaseBackoff(current, maximum time.Duration) time.Duration {
 	return current
 }
 
-// rttHistogram is a lock-free, fixed-bucket latency histogram. Buckets are
-// spaced ~10% apart on a log scale from 10µs to 600s, giving roughly 10%
-// resolution on reported percentiles without storing individual samples. All
-// mutation is via sync/atomic (matching the rest of Stats), so every connection
-// goroutine can Record concurrently. A nil *rttHistogram is a no-op, so tests
-// can use a zero-value Stats without wiring one up.
+// rttHistogram is a lock-free latency histogram: log-scale buckets ~10% apart
+// (10µs–600s), so percentiles carry ~10% resolution without storing samples.
+// All mutation is atomic — concurrent Record is safe; a nil histogram no-ops.
 type rttHistogram struct {
 	bounds  []time.Duration // ascending upper bounds
 	buckets []uint64        // len(bounds)+1; buckets[len(bounds)] holds the overflow
