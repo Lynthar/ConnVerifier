@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -22,6 +23,8 @@ import (
 const pingPayload = "PING"
 const maxStartRate = 100000
 const maxClients = 1000000
+const limiterTick = 10 * time.Millisecond
+const dialLogWindow = 10 * time.Second
 
 // errBadAck marks a heartbeat reply that did not match the ping payload. It is
 // already counted in Stats.badAcks, so recordDropReason skips re-bucketing it.
@@ -31,17 +34,32 @@ type RateLimiter struct {
 	tokens chan struct{}
 }
 
-func newRateLimiter(rate int) *RateLimiter {
-	interval := time.Second / time.Duration(rate)
-
-	rl := &RateLimiter{tokens: make(chan struct{}, rate)}
+// newRateLimiter refills in limiterTick batches via integer carry — a per-token
+// ticker needs sub-100µs ticks at high rates and weak CPUs miss them. Capacity
+// is 100ms worth of tokens so an idle spell cannot bank a burst past the rate.
+func newRateLimiter(ctx context.Context, rate int) *RateLimiter {
+	capacity := rate / 10
+	if capacity < 1 {
+		capacity = 1
+	}
+	rl := &RateLimiter{tokens: make(chan struct{}, capacity)}
 	go func() {
-		ticker := time.NewTicker(interval)
+		ticksPerSecond := int(time.Second / limiterTick)
+		ticker := time.NewTicker(limiterTick)
 		defer ticker.Stop()
-		for range ticker.C {
+		carry := 0
+		for {
 			select {
-			case rl.tokens <- struct{}{}:
-			default:
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				carry += rate
+				for ; carry >= ticksPerSecond; carry -= ticksPerSecond {
+					select {
+					case rl.tokens <- struct{}{}:
+					default: // bucket full: the excess token is discarded
+					}
+				}
 			}
 		}
 	}()
@@ -68,12 +86,14 @@ type Config struct {
 	targetConnections int
 	startRate         int
 	dialLimiter       *RateLimiter
+	dialLog           *dialLogger
 	heartbeat         time.Duration
 	dialTimeout       time.Duration
 	ioTimeout         time.Duration
 	minBackoff        time.Duration
 	maxBackoff        time.Duration
 	tcpKeepAlive      time.Duration
+	duration          time.Duration
 	logDrops          bool
 }
 
@@ -85,10 +105,10 @@ type Stats struct {
 	dropTimeouts      uint64
 	dropClosed        uint64
 	dropErrors        uint64
-	retries           uint64
 	heartbeatsSent    uint64
 	heartbeatsAck     uint64
 	badAcks           uint64
+	sessionNanos      uint64
 	activeConnections int64
 	rtt               *rttHistogram
 }
@@ -102,7 +122,8 @@ func main() {
 	ioTimeout := flag.Duration("io-timeout", 5*time.Second, "IO deadline for heartbeat traffic")
 	minBackoff := flag.Duration("min-backoff", 500*time.Millisecond, "initial reconnect backoff")
 	maxBackoff := flag.Duration("max-backoff", time.Minute, "maximum reconnect backoff")
-	tcpKeepAlive := flag.Duration("tcp-keepalive", 30*time.Second, "TCP keepalive probe interval; set <=0 to disable")
+	tcpKeepAlive := flag.Duration("tcp-keepalive", 0, "TCP keepalive probe interval; <=0 disables (keepalive refreshes NAT mappings and masks the idle timeout under test)")
+	duration := flag.Duration("duration", 0, "stop after this long and print the summary; <=0 runs until interrupted")
 	logDrops := flag.Bool("log-drops", false, "log every connection drop with its reason")
 	flag.Parse()
 
@@ -116,22 +137,30 @@ func main() {
 		minBackoff:        *minBackoff,
 		maxBackoff:        *maxBackoff,
 		tcpKeepAlive:      *tcpKeepAlive,
+		duration:          *duration,
 		logDrops:          *logDrops,
 	}
 
 	if err := validateConfig(cfg); err != nil {
 		log.Fatalf("invalid configuration: %v", err)
 	}
-	cfg.dialLimiter = newRateLimiter(cfg.startRate)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if cfg.duration > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, cfg.duration)
+		defer cancel()
+	}
+	cfg.dialLimiter = newRateLimiter(ctx, cfg.startRate)
+	cfg.dialLog = newDialLogger()
 
 	log.Printf("starting client: target=%d heartbeat=%s server=%s start_rate=%d tcp_keepalive=%s",
 		cfg.targetConnections, cfg.heartbeat, cfg.address, cfg.startRate, cfg.tcpKeepAlive)
 
 	stats := &Stats{rtt: newRttHistogram()}
-	go reportStats(ctx, cfg, stats)
+	reporterDone := make(chan struct{})
+	go reportStats(ctx, cfg, stats, reporterDone)
 
 	initialBackoff := cfg.minBackoff
 	readySlots := make(chan *Slot, cfg.targetConnections)
@@ -141,8 +170,7 @@ func main() {
 
 	go connectionManager(ctx, cfg, stats, readySlots)
 
-	<-ctx.Done()
-	log.Printf("shutdown requested")
+	<-reporterDone
 }
 
 func validateConfig(cfg Config) error {
@@ -203,14 +231,13 @@ func runSlot(ctx context.Context, slot *Slot, cfg Config, stats *Stats, readySlo
 	conn, err := dialWithStats(ctx, cfg, stats)
 	if err != nil {
 		slot.backoff = increaseBackoff(slot.backoff, cfg.maxBackoff)
-		atomic.AddUint64(&stats.retries, 1)
 		scheduleSlot(ctx, slot, jitter(slot.backoff), readySlots)
 		return
 	}
 
 	atomic.AddInt64(&stats.activeConnections, 1)
 	start := time.Now()
-	err = maintain(ctx, conn, cfg, ping, response, stats)
+	survived, err := maintain(ctx, conn, cfg, ping, response, stats)
 	atomic.AddInt64(&stats.activeConnections, -1)
 	conn.Close()
 
@@ -218,15 +245,15 @@ func runSlot(ctx context.Context, slot *Slot, cfg Config, stats *Stats, readySlo
 		return
 	}
 
+	duration := time.Since(start)
 	atomic.AddUint64(&stats.dropouts, 1)
-	atomic.AddUint64(&stats.retries, 1)
+	atomic.AddUint64(&stats.sessionNanos, uint64(duration))
 	recordDropReason(err, stats)
 
-	duration := time.Since(start)
 	if cfg.logDrops {
 		log.Printf("slot %d dropped after %s: %v", slot.id, duration.Round(time.Millisecond), err)
 	}
-	if duration >= cfg.heartbeat {
+	if survived {
 		slot.backoff = cfg.minBackoff
 	} else {
 		slot.backoff = increaseBackoff(slot.backoff, cfg.maxBackoff)
@@ -269,6 +296,32 @@ func scheduleSlot(ctx context.Context, slot *Slot, delay time.Duration, readySlo
 	}()
 }
 
+// dialLogger rate-limits dial-failure log lines to one per distinct error text
+// per dialLogWindow, keeping the cause visible by default without flooding when
+// thousands of dials fail the same way. A nil *dialLogger logs nothing.
+type dialLogger struct {
+	mu   sync.Mutex
+	last map[string]time.Time
+}
+
+func newDialLogger() *dialLogger {
+	return &dialLogger{last: make(map[string]time.Time)}
+}
+
+// shouldLog reports whether msg is due for logging at now, recording it if so.
+func (l *dialLogger) shouldLog(msg string, now time.Time) bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if t, ok := l.last[msg]; ok && now.Sub(t) < dialLogWindow {
+		return false
+	}
+	l.last[msg] = now
+	return true
+}
+
 func dialWithStats(ctx context.Context, cfg Config, stats *Stats) (net.Conn, error) {
 	atomic.AddUint64(&stats.dialAttempts, 1)
 	dialer := net.Dialer{
@@ -281,29 +334,39 @@ func dialWithStats(ctx context.Context, cfg Config, stats *Stats) (net.Conn, err
 
 	conn, err := dialer.DialContext(ctx, "tcp", cfg.address)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, err // shutdown cancellation, not a dial failure
+		}
 		atomic.AddUint64(&stats.dialErrors, 1)
+		if cfg.dialLog.shouldLog(err.Error(), time.Now()) {
+			log.Printf("dial failed: %v", err)
+		}
 		return nil, err
 	}
 	atomic.AddUint64(&stats.connections, 1)
 	return conn, nil
 }
 
-func maintain(ctx context.Context, conn net.Conn, cfg Config, ping, response []byte, stats *Stats) error {
+// maintain runs the heartbeat loop until the connection breaks or ctx ends,
+// reporting whether any interval heartbeat was acked — proof the connection
+// survived a full heartbeat interval, which is what resets the backoff.
+func maintain(ctx context.Context, conn net.Conn, cfg Config, ping, response []byte, stats *Stats) (survived bool, err error) {
 	ticker := time.NewTicker(cfg.heartbeat)
 	defer ticker.Stop()
 
 	if err := sendHeartbeat(conn, cfg, ping, response, stats); err != nil {
-		return err
+		return false, err
 	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return survived, ctx.Err()
 		case <-ticker.C:
 			if err := sendHeartbeat(conn, cfg, ping, response, stats); err != nil {
-				return err
+				return survived, err
 			}
+			survived = true
 		}
 	}
 }
@@ -471,20 +534,36 @@ func (h *rttHistogram) quantile(counts []uint64, total uint64, q float64) time.D
 	return h.bounds[len(h.bounds)-1]
 }
 
-func reportStats(ctx context.Context, cfg Config, stats *Stats) {
+// reportStats logs the per-second stats line until ctx ends, then prints the
+// exit reason and the cumulative run summary (with whole-run RTT distribution)
+// and closes done; main blocks on done so the process cannot exit before it.
+func reportStats(ctx context.Context, cfg Config, stats *Stats, done chan<- struct{}) {
+	defer close(done)
+	start := time.Now()
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
+	var cumCounts []uint64
+	var cumTotal uint64
 	for {
 		select {
 		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				log.Printf("test duration elapsed")
+			} else {
+				log.Printf("shutdown requested")
+			}
+			counts, n := stats.rtt.collect()
+			cumCounts, cumTotal = addCounts(cumCounts, cumTotal, counts, n)
+			printSummary(stats, time.Since(start), cumCounts, cumTotal)
 			return
 		case <-ticker.C:
-			rttCounts, rttSamples := stats.rtt.collect()
-			p50 := stats.rtt.quantile(rttCounts, rttSamples, 0.50)
-			p95 := stats.rtt.quantile(rttCounts, rttSamples, 0.95)
-			p99 := stats.rtt.quantile(rttCounts, rttSamples, 0.99)
-			log.Printf("stats target=%d active=%d dial_attempts=%d connected=%d dial_errors=%d drops=%d drop_timeout=%d drop_closed=%d drop_error=%d heartbeats=%d ack=%d bad_ack=%d retries=%d rtt_samples=%d rtt_p50=%s rtt_p95=%s rtt_p99=%s",
+			counts, n := stats.rtt.collect()
+			cumCounts, cumTotal = addCounts(cumCounts, cumTotal, counts, n)
+			p50 := stats.rtt.quantile(counts, n, 0.50)
+			p95 := stats.rtt.quantile(counts, n, 0.95)
+			p99 := stats.rtt.quantile(counts, n, 0.99)
+			log.Printf("stats target=%d active=%d dial_attempts=%d connects=%d dial_errors=%d drops=%d drop_timeout=%d drop_closed=%d drop_error=%d heartbeats=%d ack=%d bad_ack=%d rtt_samples=%d rtt_p50=%s rtt_p95=%s rtt_p99=%s",
 				cfg.targetConnections,
 				atomic.LoadInt64(&stats.activeConnections),
 				atomic.LoadUint64(&stats.dialAttempts),
@@ -497,12 +576,47 @@ func reportStats(ctx context.Context, cfg Config, stats *Stats) {
 				atomic.LoadUint64(&stats.heartbeatsSent),
 				atomic.LoadUint64(&stats.heartbeatsAck),
 				atomic.LoadUint64(&stats.badAcks),
-				atomic.LoadUint64(&stats.retries),
-				rttSamples,
+				n,
 				p50.Round(time.Microsecond),
 				p95.Round(time.Microsecond),
 				p99.Round(time.Microsecond),
 			)
 		}
 	}
+}
+
+func addCounts(cum []uint64, cumTotal uint64, counts []uint64, n uint64) ([]uint64, uint64) {
+	if cum == nil {
+		cum = make([]uint64, len(counts))
+	}
+	for i, c := range counts {
+		cum[i] += c
+	}
+	return cum, cumTotal + n
+}
+
+func printSummary(stats *Stats, runtime time.Duration, rttCounts []uint64, rttTotal uint64) {
+	drops := atomic.LoadUint64(&stats.dropouts)
+	avgDropped := "n/a"
+	if drops > 0 {
+		avg := time.Duration(atomic.LoadUint64(&stats.sessionNanos) / drops)
+		avgDropped = avg.Round(time.Millisecond).String()
+	}
+	log.Printf("summary runtime=%s connects=%d dial_errors=%d drops=%d drop_timeout=%d drop_closed=%d drop_error=%d heartbeats=%d ack=%d bad_ack=%d avg_dropped_session=%s rtt_samples=%d rtt_p50=%s rtt_p95=%s rtt_p99=%s",
+		runtime.Round(time.Second),
+		atomic.LoadUint64(&stats.connections),
+		atomic.LoadUint64(&stats.dialErrors),
+		drops,
+		atomic.LoadUint64(&stats.dropTimeouts),
+		atomic.LoadUint64(&stats.dropClosed),
+		atomic.LoadUint64(&stats.dropErrors),
+		atomic.LoadUint64(&stats.heartbeatsSent),
+		atomic.LoadUint64(&stats.heartbeatsAck),
+		atomic.LoadUint64(&stats.badAcks),
+		avgDropped,
+		rttTotal,
+		stats.rtt.quantile(rttCounts, rttTotal, 0.50).Round(time.Microsecond),
+		stats.rtt.quantile(rttCounts, rttTotal, 0.95).Round(time.Microsecond),
+		stats.rtt.quantile(rttCounts, rttTotal, 0.99).Round(time.Microsecond),
+	)
 }

@@ -33,7 +33,7 @@ func main() {
 	addr := flag.String("addr", ":9000", "TCP listen address")
 	maxConns := flag.Int("max-conns", 10000, "maximum concurrent connections; set <=0 for unlimited")
 	idleTimeout := flag.Duration("idle-timeout", 2*time.Minute, "idle timeout per connection; set <=0 to disable")
-	tcpKeepAlive := flag.Duration("tcp-keepalive", 30*time.Second, "TCP keepalive probe interval; set <=0 to disable")
+	tcpKeepAlive := flag.Duration("tcp-keepalive", 0, "TCP keepalive probe interval on accepted connections; <=0 disables (keepalive refreshes NAT mappings and masks the idle timeout under test)")
 	logConnections := flag.Bool("log-connections", false, "log every connection open and close")
 	flag.Parse()
 
@@ -51,7 +51,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	listener, err := net.Listen("tcp", cfg.address)
+	// KeepAlive: -1 disables keepalive at accept time. Go's default (zero) would
+	// silently enable 15s probes, refreshing the very NAT mappings the client is
+	// trying to age out; configureTCPKeepAlive re-enables it when the flag is >0.
+	lc := net.ListenConfig{KeepAlive: -1}
+	listener, err := lc.Listen(ctx, "tcp", cfg.address)
 	if err != nil {
 		log.Fatalf("listen failed: %v", err)
 	}

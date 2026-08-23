@@ -314,3 +314,105 @@ func TestScheduleSlotStopsOnContextCancel(t *testing.T) {
 	default:
 	}
 }
+
+func TestScheduleSlotDelayedDelivery(t *testing.T) {
+	ready := make(chan *Slot, 1)
+	scheduleSlot(context.Background(), &Slot{id: 7}, 5*time.Millisecond, ready)
+
+	select {
+	case s := <-ready:
+		if s.id != 7 {
+			t.Fatalf("delivered slot %d, want 7", s.id)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("slot not delivered after delay")
+	}
+}
+
+func TestMaintainReportsIntervalSurvival(t *testing.T) {
+	tests := []struct {
+		name     string
+		echoes   int
+		survived bool
+	}{
+		{"dies before any interval heartbeat", 1, false},
+		{"survives one interval heartbeat", 2, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, server := net.Pipe()
+			defer client.Close()
+
+			go func() {
+				defer server.Close()
+				buf := make([]byte, len(pingPayload))
+				for i := 0; i < tt.echoes; i++ {
+					if _, err := io.ReadFull(server, buf); err != nil {
+						return
+					}
+					if _, err := server.Write(buf); err != nil {
+						return
+					}
+				}
+			}()
+
+			cfg := validClientConfig()
+			cfg.heartbeat = 20 * time.Millisecond
+			ping := []byte(pingPayload)
+			response := make([]byte, len(ping))
+			survived, err := maintain(context.Background(), client, cfg, ping, response, &Stats{})
+			if err == nil {
+				t.Fatalf("maintain returned nil error on a closed pipe")
+			}
+			if survived != tt.survived {
+				t.Fatalf("survived = %v, want %v", survived, tt.survived)
+			}
+		})
+	}
+}
+
+func TestRateLimiterDeliversToken(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rl := newRateLimiter(ctx, 100)
+	waitCtx, waitCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer waitCancel()
+	if !rl.Wait(waitCtx) {
+		t.Fatalf("no token delivered within 2s at rate 100/s")
+	}
+}
+
+func TestRateLimiterWaitReturnsFalseOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	rl := newRateLimiter(ctx, 1)
+	cancel()
+
+	if rl.Wait(ctx) {
+		t.Fatalf("Wait returned true on a canceled context")
+	}
+}
+
+func TestDialLoggerDedup(t *testing.T) {
+	l := newDialLogger()
+	t0 := time.Now()
+
+	if !l.shouldLog("refused", t0) {
+		t.Fatalf("first occurrence must log")
+	}
+	if l.shouldLog("refused", t0.Add(dialLogWindow/2)) {
+		t.Fatalf("repeat within window must not log")
+	}
+	if !l.shouldLog("timeout", t0.Add(time.Millisecond)) {
+		t.Fatalf("distinct error must log")
+	}
+	if !l.shouldLog("refused", t0.Add(dialLogWindow+time.Millisecond)) {
+		t.Fatalf("repeat after window must log again")
+	}
+
+	var nilLogger *dialLogger
+	if nilLogger.shouldLog("x", t0) {
+		t.Fatalf("nil logger must not log")
+	}
+}
