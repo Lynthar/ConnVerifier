@@ -1,4 +1,6 @@
-package main
+// Package capacity holds a fixed pool of long-lived TCP connections against an
+// echo node, heartbeating each one and counting how and when they drop.
+package capacity
 
 import (
 	"bytes"
@@ -11,13 +13,12 @@ import (
 	"math"
 	"math/rand"
 	"net"
-	"os"
-	"os/signal"
 	"sort"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
+
+	"github.com/Lynthar/ConnVerifier/internal/netx"
 )
 
 const pingPayload = "PING"
@@ -113,40 +114,28 @@ type Stats struct {
 	rtt               *rttHistogram
 }
 
-func main() {
-	addr := flag.String("addr", "127.0.0.1:9000", "server address")
-	clients := flag.Int("clients", 1000, "target number of concurrent connections")
-	startRate := flag.Int("start-rate", 100, "max new connections started per second")
-	heartbeat := flag.Duration("heartbeat", 30*time.Second, "heartbeat interval (PING every N seconds)")
-	dialTimeout := flag.Duration("dial-timeout", 5*time.Second, "TCP dial timeout")
-	ioTimeout := flag.Duration("io-timeout", 5*time.Second, "IO deadline for heartbeat traffic")
-	minBackoff := flag.Duration("min-backoff", 500*time.Millisecond, "initial reconnect backoff")
-	maxBackoff := flag.Duration("max-backoff", time.Minute, "maximum reconnect backoff")
-	tcpKeepAlive := flag.Duration("tcp-keepalive", 0, "TCP keepalive probe interval; <=0 disables (keepalive refreshes NAT mappings and masks the idle timeout under test)")
-	duration := flag.Duration("duration", 0, "stop after this long and print the summary; <=0 runs until interrupted")
-	logDrops := flag.Bool("log-drops", false, "log every connection drop with its reason")
-	flag.Parse()
+// RegisterFlags binds cfg to fs under the command-line names and defaults.
+func (cfg *Config) RegisterFlags(fs *flag.FlagSet) {
+	fs.StringVar(&cfg.address, "addr", "127.0.0.1:9000", "server address")
+	fs.IntVar(&cfg.targetConnections, "clients", 1000, "target number of concurrent connections")
+	fs.IntVar(&cfg.startRate, "start-rate", 100, "max new connections started per second")
+	fs.DurationVar(&cfg.heartbeat, "heartbeat", 30*time.Second, "heartbeat interval (PING every N seconds)")
+	fs.DurationVar(&cfg.dialTimeout, "dial-timeout", 5*time.Second, "TCP dial timeout")
+	fs.DurationVar(&cfg.ioTimeout, "io-timeout", 5*time.Second, "IO deadline for heartbeat traffic")
+	fs.DurationVar(&cfg.minBackoff, "min-backoff", 500*time.Millisecond, "initial reconnect backoff")
+	fs.DurationVar(&cfg.maxBackoff, "max-backoff", time.Minute, "maximum reconnect backoff")
+	fs.DurationVar(&cfg.tcpKeepAlive, "tcp-keepalive", 0, "TCP keepalive probe interval; <=0 disables (keepalive refreshes NAT mappings and masks the idle timeout under test)")
+	fs.DurationVar(&cfg.duration, "duration", 0, "stop after this long and print the summary; <=0 runs until interrupted")
+	fs.BoolVar(&cfg.logDrops, "log-drops", false, "log every connection drop with its reason")
+}
 
-	cfg := Config{
-		address:           *addr,
-		targetConnections: *clients,
-		startRate:         *startRate,
-		heartbeat:         *heartbeat,
-		dialTimeout:       *dialTimeout,
-		ioTimeout:         *ioTimeout,
-		minBackoff:        *minBackoff,
-		maxBackoff:        *maxBackoff,
-		tcpKeepAlive:      *tcpKeepAlive,
-		duration:          *duration,
-		logDrops:          *logDrops,
-	}
-
+// Run holds the connection pool until ctx ends or the configured duration elapses,
+// logging a stats line per second and a summary on exit. It returns an error only
+// when cfg is invalid, before any connection is made.
+func Run(ctx context.Context, cfg Config) error {
 	if err := validateConfig(cfg); err != nil {
-		log.Fatalf("invalid configuration: %v", err)
+		return fmt.Errorf("invalid configuration: %w", err)
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	if cfg.duration > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, cfg.duration)
@@ -171,6 +160,7 @@ func main() {
 	go connectionManager(ctx, cfg, stats, readySlots)
 
 	<-reporterDone
+	return nil
 }
 
 func validateConfig(cfg Config) error {
@@ -324,15 +314,7 @@ func (l *dialLogger) shouldLog(msg string, now time.Time) bool {
 
 func dialWithStats(ctx context.Context, cfg Config, stats *Stats) (net.Conn, error) {
 	atomic.AddUint64(&stats.dialAttempts, 1)
-	dialer := net.Dialer{
-		Timeout:   cfg.dialTimeout,
-		KeepAlive: cfg.tcpKeepAlive,
-	}
-	if cfg.tcpKeepAlive <= 0 {
-		dialer.KeepAlive = -1
-	}
-
-	conn, err := dialer.DialContext(ctx, "tcp", cfg.address)
+	conn, err := netx.Dialer(cfg.dialTimeout, cfg.tcpKeepAlive).DialContext(ctx, "tcp", cfg.address)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, err // shutdown cancellation, not a dial failure
@@ -376,7 +358,7 @@ func sendHeartbeat(conn net.Conn, cfg Config, ping, response []byte, stats *Stat
 	if err := conn.SetWriteDeadline(start.Add(cfg.ioTimeout)); err != nil {
 		return err
 	}
-	if err := writeFull(conn, ping); err != nil {
+	if err := netx.WriteFull(conn, ping); err != nil {
 		return err
 	}
 
@@ -395,20 +377,6 @@ func sendHeartbeat(conn net.Conn, cfg Config, ping, response []byte, stats *Stat
 
 	atomic.AddUint64(&stats.heartbeatsAck, 1)
 	stats.rtt.Record(time.Since(start))
-	return nil
-}
-
-func writeFull(conn net.Conn, data []byte) error {
-	for len(data) > 0 {
-		n, err := conn.Write(data)
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			return io.ErrShortWrite
-		}
-		data = data[n:]
-	}
 	return nil
 }
 
@@ -531,7 +499,7 @@ func (h *rttHistogram) quantile(counts []uint64, total uint64, q float64) time.D
 
 // reportStats logs the per-second stats line until ctx ends, then prints the
 // exit reason and the cumulative run summary (with whole-run RTT distribution)
-// and closes done; main blocks on done so the process cannot exit before it.
+// and closes done; Run blocks on done so it cannot return before the summary.
 func reportStats(ctx context.Context, cfg Config, stats *Stats, done chan<- struct{}) {
 	defer close(done)
 	start := time.Now()

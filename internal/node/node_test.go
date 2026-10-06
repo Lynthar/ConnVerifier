@@ -1,4 +1,4 @@
-package main
+package node
 
 import (
 	"bytes"
@@ -8,14 +8,14 @@ import (
 	"time"
 )
 
-func TestValidateServerConfig(t *testing.T) {
-	cfg := ServerConfig{address: "127.0.0.1:9000"}
-	if err := validateServerConfig(cfg); err != nil {
+func TestValidateConfig(t *testing.T) {
+	cfg := Config{address: "127.0.0.1:9000"}
+	if err := validateConfig(cfg); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
 	}
 
 	cfg.address = ""
-	if err := validateServerConfig(cfg); err == nil {
+	if err := validateConfig(cfg); err == nil {
 		t.Fatalf("empty address accepted")
 	}
 }
@@ -39,7 +39,7 @@ func TestHandleEchoesBytesAndCallsDone(t *testing.T) {
 	defer client.Close()
 
 	done := make(chan struct{})
-	go handle(server, ServerConfig{idleTimeout: time.Second}, func() {
+	go handle(server, Config{idleTimeout: time.Second}, func() {
 		close(done)
 	})
 
@@ -74,7 +74,7 @@ func TestHandleIdleTimeout(t *testing.T) {
 	defer client.Close()
 
 	done := make(chan struct{})
-	go handle(server, ServerConfig{idleTimeout: 10 * time.Millisecond}, func() {
+	go handle(server, Config{idleTimeout: 10 * time.Millisecond}, func() {
 		close(done)
 	})
 

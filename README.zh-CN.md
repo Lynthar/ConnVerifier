@@ -2,15 +2,14 @@
 
 [![license](https://img.shields.io/github/license/Lynthar/ConnVerifier)](LICENSE)
 
-用两个 Go 程序维持上万条空闲 TCP 长连接，测出 NAT 在多久后丢弃映射，附 RTT 百分位与掉线归因
+用一个 Go 程序维持上万条空闲 TCP 长连接，测出 NAT 在多久后丢弃映射，附 RTT 百分位与掉线归因
 
 [English](README.md) | 简体中文
 
-> **施工中。** 下面写的它都能做，测试也是过的，但**没有 release、没有 CI、没有版本号旗标**，
-> 只能从源码构建。
+> **施工中。** 下面写的它都能做，测试也是过的，但**没有 release、没有 CI**，只能从源码构建。
 
 运营商和家用路由器会悄悄忘掉空闲的 TCP 连接。这东西就是用来测「多久之后忘」的。
-一个程序把收到的字节原样回显；另一个按你要求的数量把连接建起来，用很小的心跳维持着，
+`connverifier serve` 把收到的字节原样回显；`connverifier capacity` 按你要求的数量把连接建起来，用很小的心跳维持着，
 然后告诉你有多少条活下来、活了多久——每一次掉线都归因到超时、对端关闭，还是出错。
 每秒输出 p50、p95、p99 RTT，连同各项连接计数。
 
@@ -18,14 +17,18 @@
 
 ## 构建
 
-没有 release，而且 `go install` 用不了——模块路径不是仓库路径。克隆下来自己编，
-需要 Go 1.21 以上：
+还没有 release。需要 Go 1.26 以上：
+
+```bash
+go install github.com/Lynthar/ConnVerifier/cmd/connverifier@latest
+```
+
+或者克隆下来自己编：
 
 ```bash
 git clone https://github.com/Lynthar/ConnVerifier.git
 cd ConnVerifier
-go build -o bin/connverifier-server ./cmd/server
-go build -o bin/connverifier-client ./cmd/client
+go build -o bin/connverifier ./cmd/connverifier
 ```
 
 跑大规模之前，**两端**都要先把文件描述符上限抬上去——一条连接就是一个描述符。
@@ -34,19 +37,19 @@ go build -o bin/connverifier-client ./cmd/client
 
 ```bash
 ulimit -n 20480
-./bin/connverifier-server -addr :9000 -max-conns 20000 -idle-timeout 2m
+./bin/connverifier serve -addr :9000 -max-conns 20000 -idle-timeout 2m
 ```
 
 另一头：
 
 ```bash
-./bin/connverifier-client -addr <服务端>:9000 -clients 10000 -start-rate 500 -heartbeat 30s
+./bin/connverifier capacity -addr <服务端>:9000 -clients 10000 -start-rate 500 -heartbeat 30s
 ```
 
 想跑完自己停的无人值守：
 
 ```bash
-./bin/connverifier-client -addr <服务端>:9000 -clients 1000 -duration 1h
+./bin/connverifier capacity -addr <服务端>:9000 -clients 1000 -duration 1h
 ```
 
 输出长这样，每秒一行，结束时另有一份总结：
@@ -56,10 +59,10 @@ stats target=50 active=50 dial_attempts=50 connects=50 dial_errors=0 drops=0
   heartbeats=100 ack=100 rtt_p50=159µs rtt_p95=255µs rtt_p99=255µs
 ```
 
-全部走旗标，没有配置文件，没有环境变量。客户端：`-addr`、`-clients`（1000）、
+全部走旗标，没有配置文件，没有环境变量。`capacity`：`-addr`、`-clients`（1000）、
 `-start-rate`（100）、`-heartbeat`（30s）、`-dial-timeout`（5s）、`-io-timeout`（5s）、
 `-min-backoff`（500ms）、`-max-backoff`（1m）、`-tcp-keepalive`（0）、
-`-duration`（0＝直到中断）、`-log-drops`。服务端：`-addr`（:9000）、`-max-conns`（10000）、
+`-duration`（0＝直到中断）、`-log-drops`。`serve`：`-addr`（:9000）、`-max-conns`（10000）、
 `-idle-timeout`（2m）、`-tcp-keepalive`（0）、`-log-connections`。零或负数一律表示
 「禁用 / 无限」。
 
@@ -82,7 +85,7 @@ stats target=50 active=50 dial_attempts=50 connects=50 dial_errors=0 drops=0
 ## 与上游的区别
 
 本仓库 fork 自 [codeberg.org/woq/ConnVerifier](https://codeberg.org/woq/ConnVerifier)。
-我在它基础上加的是：`cmd/` 布局与测试、RTT 百分位、掉线归因、带抖动的指数退避重连、
+我在它基础上加的是：单个 `connverifier` 程序与测试、RTT 百分位、掉线归因、带抖动的指数退避重连、
 有并发上限和空闲回收的服务端，以及给无人值守长跑用的 `-duration`。
 
 ## 安全

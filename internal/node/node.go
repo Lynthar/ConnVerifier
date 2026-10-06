@@ -1,4 +1,6 @@
-package main
+// Package node is the echo endpoint that clients hold connections against: it
+// reflects every byte and drops peers that stay idle past the configured timeout.
+package node
 
 import (
 	"context"
@@ -7,14 +9,13 @@ import (
 	"io"
 	"log"
 	"net"
-	"os"
-	"os/signal"
 	"sync/atomic"
-	"syscall"
 	"time"
+
+	"github.com/Lynthar/ConnVerifier/internal/netx"
 )
 
-type ServerConfig struct {
+type Config struct {
 	address        string
 	maxConns       int
 	idleTimeout    time.Duration
@@ -22,48 +23,38 @@ type ServerConfig struct {
 	logConnections bool
 }
 
-type ServerStats struct {
+type Stats struct {
 	accepted uint64
 	rejected uint64
 	closed   uint64
 	active   int64
 }
 
-func main() {
-	addr := flag.String("addr", ":9000", "TCP listen address")
-	maxConns := flag.Int("max-conns", 10000, "maximum concurrent connections; set <=0 for unlimited")
-	idleTimeout := flag.Duration("idle-timeout", 2*time.Minute, "idle timeout per connection; set <=0 to disable")
-	tcpKeepAlive := flag.Duration("tcp-keepalive", 0, "TCP keepalive probe interval on accepted connections; <=0 disables (keepalive refreshes NAT mappings and masks the idle timeout under test)")
-	logConnections := flag.Bool("log-connections", false, "log every connection open and close")
-	flag.Parse()
+// RegisterFlags binds cfg to fs under the command-line names and defaults.
+func (cfg *Config) RegisterFlags(fs *flag.FlagSet) {
+	fs.StringVar(&cfg.address, "addr", ":9000", "TCP listen address")
+	fs.IntVar(&cfg.maxConns, "max-conns", 10000, "maximum concurrent connections; set <=0 for unlimited")
+	fs.DurationVar(&cfg.idleTimeout, "idle-timeout", 2*time.Minute, "idle timeout per connection; set <=0 to disable")
+	fs.DurationVar(&cfg.tcpKeepAlive, "tcp-keepalive", 0, "TCP keepalive probe interval on accepted connections; <=0 disables (keepalive refreshes NAT mappings and masks the idle timeout under test)")
+	fs.BoolVar(&cfg.logConnections, "log-connections", false, "log every connection open and close")
+}
 
-	cfg := ServerConfig{
-		address:        *addr,
-		maxConns:       *maxConns,
-		idleTimeout:    *idleTimeout,
-		tcpKeepAlive:   *tcpKeepAlive,
-		logConnections: *logConnections,
-	}
-	if err := validateServerConfig(cfg); err != nil {
-		log.Fatalf("invalid configuration: %v", err)
+// Serve accepts and echoes connections until ctx ends. It returns an error when
+// cfg is invalid or the listener cannot be opened; otherwise nil after shutdown.
+func Serve(ctx context.Context, cfg Config) error {
+	if err := validateConfig(cfg); err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	// KeepAlive: -1 disables keepalive at accept time. Go's default (zero) would
-	// silently enable 15s probes, refreshing the very NAT mappings the client is
-	// trying to age out; configureTCPKeepAlive re-enables it when the flag is >0.
-	lc := net.ListenConfig{KeepAlive: -1}
-	listener, err := lc.Listen(ctx, "tcp", cfg.address)
+	listener, err := netx.Listen(ctx, cfg.address, cfg.tcpKeepAlive)
 	if err != nil {
-		log.Fatalf("listen failed: %v", err)
+		return fmt.Errorf("listen failed: %w", err)
 	}
 	log.Printf("echo server listening on %s max_conns=%d idle_timeout=%s tcp_keepalive=%s",
 		listener.Addr(), cfg.maxConns, cfg.idleTimeout, cfg.tcpKeepAlive)
 
-	stats := &ServerStats{}
-	go reportServerStats(ctx, stats)
+	stats := &Stats{}
+	go reportStats(ctx, stats)
 
 	// Unblock Accept on shutdown so the loop can exit cleanly.
 	go func() {
@@ -94,7 +85,6 @@ func main() {
 			continue
 		}
 
-		configureTCPKeepAlive(conn, cfg.tcpKeepAlive)
 		atomic.AddUint64(&stats.accepted, 1)
 		atomic.AddInt64(&stats.active, 1)
 		go handle(conn, cfg, func() {
@@ -107,9 +97,10 @@ func main() {
 	log.Printf("shutdown: stopped accepting; active=%d accepted=%d rejected=%d closed=%d",
 		atomic.LoadInt64(&stats.active), atomic.LoadUint64(&stats.accepted),
 		atomic.LoadUint64(&stats.rejected), atomic.LoadUint64(&stats.closed))
+	return nil
 }
 
-func reportServerStats(ctx context.Context, stats *ServerStats) {
+func reportStats(ctx context.Context, stats *Stats) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -128,7 +119,7 @@ func reportServerStats(ctx context.Context, stats *ServerStats) {
 	}
 }
 
-func validateServerConfig(cfg ServerConfig) error {
+func validateConfig(cfg Config) error {
 	if cfg.address == "" {
 		return fmt.Errorf("addr must not be empty")
 	}
@@ -161,21 +152,7 @@ func releaseConnection(limit chan struct{}) {
 	<-limit
 }
 
-func configureTCPKeepAlive(conn net.Conn, interval time.Duration) {
-	tcpConn, ok := conn.(*net.TCPConn)
-	if !ok || interval <= 0 {
-		return
-	}
-	if err := tcpConn.SetKeepAlive(true); err != nil {
-		log.Printf("set tcp keepalive failed for %s: %v", conn.RemoteAddr(), err)
-		return
-	}
-	if err := tcpConn.SetKeepAlivePeriod(interval); err != nil {
-		log.Printf("set tcp keepalive period failed for %s: %v", conn.RemoteAddr(), err)
-	}
-}
-
-func handle(conn net.Conn, cfg ServerConfig, done func()) {
+func handle(conn net.Conn, cfg Config, done func()) {
 	defer conn.Close()
 	if done != nil {
 		defer done()
@@ -196,7 +173,7 @@ func handle(conn net.Conn, cfg ServerConfig, done func()) {
 
 		n, err := conn.Read(buf)
 		if n > 0 {
-			if writeErr := writeFull(conn, buf[:n]); writeErr != nil {
+			if writeErr := netx.WriteFull(conn, buf[:n]); writeErr != nil {
 				if cfg.logConnections {
 					log.Printf("echo write error to %s: %v", conn.RemoteAddr(), writeErr)
 				}
@@ -216,18 +193,4 @@ func handle(conn net.Conn, cfg ServerConfig, done func()) {
 			return
 		}
 	}
-}
-
-func writeFull(conn net.Conn, data []byte) error {
-	for len(data) > 0 {
-		n, err := conn.Write(data)
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			return io.ErrShortWrite
-		}
-		data = data[n:]
-	}
-	return nil
 }

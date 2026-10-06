@@ -2,16 +2,16 @@
 
 [![license](https://img.shields.io/github/license/Lynthar/ConnVerifier)](LICENSE)
 
-Two Go binaries that hold thousands of idle TCP connections to find where NAT drops them, with RTT percentiles
+A Go tool that holds thousands of idle TCP connections to find where NAT drops them, with RTT percentiles
 
 English | [简体中文](README.zh-CN.md)
 
 > **Under construction.** It does what's described below and the tests pass, but
-> there's no release, no CI and no version flag — you build it from source.
+> there's no release and no CI — you build it from source.
 
 Carriers and home routers quietly forget idle TCP connections. This finds out
-when. One binary echoes bytes back; the other opens as many connections as you
-ask for, keeps them alive with a small heartbeat, and reports what percentage
+when. `connverifier serve` echoes bytes back; `connverifier capacity` opens as
+many connections as you ask for, keeps them alive with a small heartbeat, and reports what percentage
 survived and for how long — with each disconnect attributed to a timeout, a
 close from the peer, or an error. Every second it prints p50, p95 and p99 RTT
 alongside the connection counts.
@@ -20,14 +20,18 @@ Standard library only, no dependencies.
 
 ## Build
 
-There's no release and `go install` won't work — the module path isn't the
-repository path. Clone and build; you need Go 1.21 or newer:
+There's no release yet. With Go 1.26 or newer:
+
+```bash
+go install github.com/Lynthar/ConnVerifier/cmd/connverifier@latest
+```
+
+Or clone and build:
 
 ```bash
 git clone https://github.com/Lynthar/ConnVerifier.git
 cd ConnVerifier
-go build -o bin/connverifier-server ./cmd/server
-go build -o bin/connverifier-client ./cmd/client
+go build -o bin/connverifier ./cmd/connverifier
 ```
 
 Raise the file descriptor limit on **both** machines before running anything
@@ -37,19 +41,19 @@ sizeable — one connection is one descriptor.
 
 ```bash
 ulimit -n 20480
-./bin/connverifier-server -addr :9000 -max-conns 20000 -idle-timeout 2m
+./bin/connverifier serve -addr :9000 -max-conns 20000 -idle-timeout 2m
 ```
 
 On the other side:
 
 ```bash
-./bin/connverifier-client -addr <server>:9000 -clients 10000 -start-rate 500 -heartbeat 30s
+./bin/connverifier capacity -addr <server>:9000 -clients 10000 -start-rate 500 -heartbeat 30s
 ```
 
 For an unattended run that stops on its own:
 
 ```bash
-./bin/connverifier-client -addr <server>:9000 -clients 1000 -duration 1h
+./bin/connverifier capacity -addr <server>:9000 -clients 1000 -duration 1h
 ```
 
 Output looks like this, once a second, then a summary at the end:
@@ -60,10 +64,10 @@ stats target=50 active=50 dial_attempts=50 connects=50 dial_errors=0 drops=0
 ```
 
 Everything is a flag; there's no config file and no environment variables.
-Client: `-addr`, `-clients` (1000), `-start-rate` (100), `-heartbeat` (30s),
+`capacity`: `-addr`, `-clients` (1000), `-start-rate` (100), `-heartbeat` (30s),
 `-dial-timeout` (5s), `-io-timeout` (5s), `-min-backoff` (500ms),
 `-max-backoff` (1m), `-tcp-keepalive` (0), `-duration` (0 = until interrupted),
-`-log-drops`. Server: `-addr` (:9000), `-max-conns` (10000), `-idle-timeout`
+`-log-drops`. `serve`: `-addr` (:9000), `-max-conns` (10000), `-idle-timeout`
 (2m), `-tcp-keepalive` (0), `-log-connections`. Zero or negative means disabled
 or unlimited.
 
@@ -90,7 +94,7 @@ mapping and quietly turn every result into "the NAT is fine".
 ## Differences from upstream
 
 This is a fork of [codeberg.org/woq/ConnVerifier](https://codeberg.org/woq/ConnVerifier).
-What I added: the `cmd/` layout with tests, RTT percentiles, drop attribution,
+What I added: a single `connverifier` binary with tests, RTT percentiles, drop attribution,
 reconnect with exponential backoff and jitter, a server with a connection cap
 and idle reaping, and `-duration` for unattended soak runs.
 
