@@ -1,2 +1,2 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Normalize to LF everywhere; golden files under testdata/ compare bytes.
+* text=auto eol=lf

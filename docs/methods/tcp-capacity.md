@@ -1,6 +1,6 @@
 # `tcp-capacity` — long-lived TCP connections
 
-Method version **1**.
+Method version **2**.
 
 ## 1. Question
 
@@ -45,6 +45,8 @@ error?
 
 - **Connect:** a dial that completed the TCP handshake.
 - **Dial error:** a dial that failed for a reason other than the run ending.
+  `dial_errors.host_resource` counts the ones where this host ran out of file
+  descriptors, ephemeral ports or socket buffers.
 - **Drop:** an established connection that broke before the run ended. Each drop
   falls in exactly one bucket, so `drops` is their sum:
   - `drops.timeout` — the heartbeat reply did not arrive within `io_timeout_ms`;
@@ -67,6 +69,14 @@ error?
   up to one `heartbeat_ms`, and the number of live connections reads high in between.
 - If the node's idle timeout is not longer than `heartbeat_ms`, the node itself
   closes every connection and the result describes the node, not the network.
+- Before the run the client reads its open-file limit (`host.fd_limit`) and its
+  ephemeral port range (`host.ephemeral_ports`) where the platform reports them;
+  an unreported value is absent from the result, not zero. If the open-file limit
+  is below `target_connections` + 32, or the port range below `target_connections`,
+  or any dial fails for lack of host resources, the result is `INVALID`: it shows
+  the limit of the machine running the tool, not of the network. The Go runtime
+  raises the soft open-file limit to the hard limit at startup, so only a lower
+  hard limit (`ulimit -Hn`) constrains a run.
 
 ## 6. Influences
 
@@ -106,20 +116,26 @@ rules and metric construction are covered by unit tests.
 
 ## Status rules
 
-Rules 1 and 2 decide the status on their own. Otherwise rules 3 and 4 are each
-checked, the status is `WARN` if either holds, and both contribute their messages;
-if neither holds the status is `PASS`.
+Rules 1 to 3 decide the status on their own, in order. Otherwise rules 4 and 5 are
+each checked, the status is `WARN` if either holds, and both contribute their
+messages; if neither holds the status is `PASS`.
 
 | # | Condition | Status | Messages |
 |---|---|---|---|
-| 1 | `connects` = 0 and `dial_errors` > 0 | `ERROR` | error: no connection could be made |
+| 1 | `connects` = 0 and `dial_errors` > 0 | `ERROR` | error: no connection could be made — naming the host as the cause when every failed dial was a host resource error |
 | 2 | `connects` = 0 and `dial_errors` = 0 | `INVALID` | warning: the run ended before any connection completed |
-| 3 | `drops` > 0 | `WARN` | an inference per non-empty drop bucket; not proven: node rejection versus network drop; not proven: exact lifetimes |
-| 4 | `heartbeats.interval_acked` = 0 | `WARN` | not proven: no connection was seen idle for a full heartbeat interval |
-| 5 | otherwise | `PASS` | — |
+| 3 | `dial_errors.host_resource` > 0, or `host.fd_limit` < `target_connections` + 32, or `host.ephemeral_ports` < `target_connections` | `INVALID` | a warning per condition that holds; no inferences, since the counts below reflect the host's limit |
+| 4 | `drops` > 0 | `WARN` | an inference per non-empty drop bucket; not proven: node rejection versus network drop; not proven: exact lifetimes |
+| 5 | `heartbeats.interval_acked` = 0 | `WARN` | not proven: no connection was seen idle for a full heartbeat interval |
+| 6 | otherwise | `PASS` | — |
 
 ## Method version changes
 
 The method version increases when the heartbeat payload or timing, the drop
 definitions or buckets, the quantile estimator or its sufficiency rule, or the
 status rules change.
+
+| Version | Change |
+|---|---|
+| 2 | Host resource limits make the result `INVALID` (rule 3). |
+| 1 | First version. |

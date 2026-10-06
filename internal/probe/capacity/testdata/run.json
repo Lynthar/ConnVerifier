@@ -14,7 +14,7 @@
   "checks": [
     {
       "id": "tcp-capacity",
-      "method_version": 1,
+      "method_version": 2,
       "status": "WARN",
       "path": {
         "node": "192.0.2.10:9000",
@@ -43,6 +43,11 @@
           "id": "dial_errors",
           "unit": "count",
           "value": 2
+        },
+        {
+          "id": "dial_errors.host_resource",
+          "unit": "count",
+          "value": 0
         },
         {
           "id": "drops",
@@ -107,6 +112,16 @@
           "unit": "ms",
           "value": 45000,
           "samples": 31
+        },
+        {
+          "id": "host.fd_limit",
+          "unit": "count",
+          "value": 10240
+        },
+        {
+          "id": "host.ephemeral_ports",
+          "unit": "count",
+          "value": 16384
         }
       ],
       "inferences": [

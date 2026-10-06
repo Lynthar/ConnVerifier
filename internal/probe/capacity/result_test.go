@@ -30,6 +30,7 @@ func TestEvaluateStatusRules(t *testing.T) {
 	tests := []struct {
 		name       string
 		snap       snapshot
+		target     int
 		status     result.Status
 		errKey     string
 		warnings   []string
@@ -42,41 +43,69 @@ func TestEvaluateStatusRules(t *testing.T) {
 			status: result.Error, errKey: "tcp_capacity.error.no_connection",
 		},
 		{
+			name:   "1 every failed dial was a host resource error",
+			snap:   snapshot{dialErrors: 3, dialErrorsHost: 3},
+			status: result.Error, errKey: "tcp_capacity.error.no_connection_host_resource",
+		},
+		{
 			name:     "2 no connects and no dial errors",
 			snap:     snapshot{},
 			status:   result.Invalid,
 			warnings: []string{"warning.ended_before_connect"},
 		},
 		{
-			name:       "3 drops after a full interval",
+			name:     "3 host ran out of resources while dialing",
+			snap:     snapshot{connects: 5, dialErrors: 2, dialErrorsHost: 2, dropClosed: 1},
+			status:   result.Invalid,
+			warnings: []string{"warning.host_resource"},
+		},
+		{
+			name:     "3 fd limit below target",
+			snap:     snapshot{connects: 5, intervalAcks: 4, host: hostLimits{fdLimit: 100}},
+			target:   200,
+			status:   result.Invalid,
+			warnings: []string{"warning.fd_limit"},
+		},
+		{
+			name:     "3 port range below target",
+			snap:     snapshot{connects: 5, intervalAcks: 4, host: hostLimits{fdLimit: 1 << 20, ephemeralPorts: 100}},
+			target:   200,
+			status:   result.Invalid,
+			warnings: []string{"warning.port_range"},
+		},
+		{
+			name:       "4 drops after a full interval",
 			snap:       snapshot{connects: 5, dropClosed: 2, intervalAcks: 4},
 			status:     result.Warn,
 			inferences: []string{"inference.peer_closed"},
 			notProven:  []string{"not_proven.rejection_vs_drop", "not_proven.lifetime_upper_bound"},
 		},
 		{
-			name:      "4 no drops but no full interval",
+			name:      "5 no drops but no full interval",
 			snap:      snapshot{connects: 5},
 			status:    result.Warn,
 			notProven: []string{"not_proven.no_full_interval"},
 		},
 		{
-			name:       "3 and 4 together",
+			name:       "4 and 5 together",
 			snap:       snapshot{connects: 5, dropTimeouts: 1, dropBadAcks: 1},
 			status:     result.Warn,
 			inferences: []string{"inference.silent_drops", "inference.bad_ack"},
 			notProven:  []string{"not_proven.rejection_vs_drop", "not_proven.lifetime_upper_bound", "not_proven.no_full_interval"},
 		},
 		{
-			name:   "5 no drops and a full interval",
-			snap:   snapshot{connects: 5, intervalAcks: 4},
+			name:   "6 no drops and a full interval within host limits",
+			snap:   snapshot{connects: 5, intervalAcks: 4, host: hostLimits{fdLimit: 1 << 20, ephemeralPorts: 16384}},
+			target: 200,
 			status: result.Pass,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			cfg := validClientConfig()
+			cfg.targetConnections = max(1, tt.target)
 			var c result.Check
-			evaluate(&c, tt.snap, time.Second)
+			evaluate(&c, tt.snap, cfg)
 			if c.Status != tt.status {
 				t.Fatalf("status = %s, want %s", c.Status, tt.status)
 			}
@@ -145,6 +174,7 @@ func goldenRun() result.Run {
 		dropTimeouts: 3, dropClosed: 1, dropErrors: 27,
 		heartbeatsSent: 233, heartbeatsAck: 200, intervalAcks: 120,
 		sessionNanos: uint64(31 * 45 * time.Second), family: "ipv4",
+		host: hostLimits{fdLimit: 10240, ephemeralPorts: 16384},
 	}
 	check := buildCheck(cfg, finalStats{snap: snap, rttCounts: counts, rttTotal: total}, h, 10*time.Minute+12*time.Millisecond)
 
@@ -201,6 +231,8 @@ func TestResultGolden(t *testing.T) {
 func TestTextHasNoRawKeys(t *testing.T) {
 	snaps := []snapshot{
 		{dialErrors: 3, lastDialError: "refused"},
+		{dialErrors: 3, dialErrorsHost: 3, lastDialError: "too many open files"},
+		{connects: 5, dialErrors: 1, dialErrorsHost: 1, host: hostLimits{fdLimit: 10, ephemeralPorts: 1}},
 		{},
 		{connects: 5, dropTimeouts: 1, dropClosed: 1, dropErrors: 1, dropBadAcks: 1},
 		{connects: 5, intervalAcks: 1},
@@ -210,7 +242,9 @@ func TestTextHasNoRawKeys(t *testing.T) {
 		h := newRttHistogram()
 		run.Checks = append(run.Checks, buildCheck(validClientConfig(), finalStats{snap: s}, h, time.Second))
 	}
-	prefixes := []string{"tcp_capacity.", "metric.", "param.", "label.", "section.", "status.", "check.", "line.", "value."}
+	prefixes := []string{"tcp_capacity.", "metric.", "param.", "label.", "section.", "status.", "check.", "line.", "value.", "confirm."}
+	untilStopped, timed := validClientConfig(), validClientConfig()
+	untilStopped.duration, timed.duration = 0, time.Minute
 	for _, lang := range i18n.Supported {
 		cat, err := i18n.Load(lang)
 		if err != nil {
@@ -219,6 +253,12 @@ func TestTextHasNoRawKeys(t *testing.T) {
 		var b bytes.Buffer
 		if err := report.Text(&b, run, cat); err != nil {
 			t.Fatal(err)
+		}
+		for _, cfg := range []Config{untilStopped, timed} {
+			b.WriteString(report.Message(cat, cfg.Notice()) + "\n")
+		}
+		for _, key := range []string{"confirm.prompt", "confirm.declined", "confirm.needs_yes"} {
+			b.WriteString(cat.Text(key, nil) + "\n")
 		}
 		for _, p := range prefixes {
 			if i := strings.Index(b.String(), p); i >= 0 {

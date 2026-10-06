@@ -1,10 +1,13 @@
 package netx
 
 import (
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -77,5 +80,19 @@ func TestDialAndListenOnlyHere(t *testing.T) {
 	}
 	if scanned == 0 {
 		t.Fatal("no Go files scanned; module root not found")
+	}
+}
+
+func TestIsClientResource(t *testing.T) {
+	for _, errno := range resourceErrnos {
+		err := &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", errno)}
+		if !IsClientResource(err) {
+			t.Errorf("%v not classified as a client resource error", err)
+		}
+	}
+	for _, err := range []error{nil, errors.New("connection refused"), &net.OpError{Op: "dial", Err: os.ErrDeadlineExceeded}} {
+		if IsClientResource(err) {
+			t.Errorf("%v classified as a client resource error", err)
+		}
 	}
 }

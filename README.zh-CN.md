@@ -6,7 +6,7 @@
 
 [English](README.md) | 简体中文
 
-> **施工中。** 下面写的它都能做，测试也是过的，但**没有 release、没有 CI**，只能从源码构建。
+> **施工中。** 下面写的它都能做，测试也是过的，但**还没有 release**，只能从源码构建。
 
 运营商和家用路由器会悄悄忘掉空闲的 TCP 连接。这东西就是用来测「多久之后忘」的。
 `connverifier serve` 把收到的字节原样回显；`connverifier capacity` 按你要求的数量把连接建起来，用很小的心跳维持着，
@@ -31,7 +31,9 @@ cd ConnVerifier
 go build -o bin/connverifier ./cmd/connverifier
 ```
 
-跑大规模之前，**两端**都要先把文件描述符上限抬上去——一条连接就是一个描述符。
+跑大规模之前，**两端**都要先把文件描述符上限抬上去——一条连接就是一个描述符。客户端的
+上限或临时端口范围低于目标连接数，或者拨号因这两样用尽而失败，结果会标成 `INVALID`：那测到的
+是客户机自己的上限，不是网络的。
 
 ## 用法
 
@@ -40,7 +42,8 @@ ulimit -n 20480
 ./bin/connverifier serve -addr :9000 -max-conns 20000 -idle-timeout 2m
 ```
 
-另一头：
+另一头。`capacity` 开跑前会先说明要建多少连接，并在终端里请你确认——占满 NAT 表可能让
+同一网络里的其他设备断网；`-yes` 跳过确认，标准输入不是终端时必须加：
 
 ```bash
 ./bin/connverifier capacity -addr <服务端>:9000 -clients 10000 -start-rate 500 -heartbeat 30s
@@ -49,7 +52,7 @@ ulimit -n 20480
 想跑完自己停的无人值守：
 
 ```bash
-./bin/connverifier capacity -addr <服务端>:9000 -clients 1000 -duration 1h
+./bin/connverifier capacity -addr <服务端>:9000 -clients 1000 -duration 1h -yes
 ```
 
 运行中每秒往 stderr 打一行进度：
@@ -83,7 +86,7 @@ TCP 长连接容量：注意（WARN）
 全部走旗标，没有配置文件，没有环境变量。`capacity`：`-addr`、`-clients`（1000）、
 `-start-rate`（100）、`-heartbeat`（30s）、`-dial-timeout`（5s）、`-io-timeout`（5s）、
 `-min-backoff`（500ms）、`-max-backoff`（1m）、`-tcp-keepalive`（0）、
-`-duration`（0＝直到中断）、`-log-drops`、`-format`（text）、`-lang`。`serve`：`-addr`（:9000）、`-max-conns`（10000）、
+`-duration`（0＝直到中断）、`-log-drops`、`-format`（text）、`-lang`、`-yes`。`serve`：`-addr`（:9000）、`-max-conns`（10000）、
 `-idle-timeout`（2m）、`-tcp-keepalive`（0）、`-log-connections`。零或负数一律表示
 「禁用 / 无限」。
 
@@ -95,8 +98,8 @@ TCP 长连接容量：注意（WARN）
 - **只测 TCP。** 没有 UDP、没有 STUN、没有 DNS、不测带宽。
 - **JSON 的 schema 还是 `v0`。** 不同构建之间仍可能变；要解析就固定一个构建，别解析文本。
 - **退出码不评判网络质量。** 0 表示跑完了，不管各项状态如何；1 表示有检查没拿到有效
-  测量（状态 `ERROR`，比如节点连不上），或工具自己出错；2 表示参数不对。要按网络质量
-  设门禁，读 JSON。
+  测量（状态 `ERROR`，比如节点连不上），或工具自己出错；2 表示什么都没跑：参数不对，或
+  没有确认。要按网络质量设门禁，读 JSON。
 - **掉线是靠心跳发现的，不是即时的。** 两次心跳之间到达的 `FIN` 要等下一拍才被看见，
   所以报出来的存活时长是上界，`active` 会短暂偏高。
 - **服务端满载拒绝会伪装成客户端故障。** TCP 握手在拒绝之前就完成了，表现为

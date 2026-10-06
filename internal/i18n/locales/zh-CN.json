@@ -21,8 +21,13 @@
   "section.not_proven": "未能证明",
   "section.warnings": "有效性警告",
   "section.error": "错误",
+  "confirm.prompt": "继续吗？[y/N] ",
+  "confirm.declined": "已取消，没有建立任何连接。",
+  "confirm.needs_yes": "标准输入不是终端，没法确认；确定要跑就加上 -yes。",
 
   "check.tcp-capacity.title": "TCP 长连接容量",
+  "tcp_capacity.confirm.notice": "即将向 {node} 建立并保持 {connections} 条 TCP 连接，每秒最多新建 {rate} 条，持续 {duration_ms}。这会占用路由器和运营商 NAT 的连接表，同一网络里的其他设备可能短时断网。",
+  "tcp_capacity.confirm.notice_until_stopped": "即将向 {node} 建立并保持 {connections} 条 TCP 连接，每秒最多新建 {rate} 条，一直持续到你中断为止。这会占用路由器和运营商 NAT 的连接表，同一网络里的其他设备可能短时断网。",
 
   "param.target_connections": "目标连接数",
   "param.start_rate": "每秒新建连接上限",
@@ -38,6 +43,7 @@
 
   "metric.connects": "成功建连",
   "metric.dial_errors": "建连失败",
+  "metric.dial_errors.host_resource": "建连失败（本机资源耗尽）",
   "metric.drops": "掉线",
   "metric.drops.timeout": "掉线（超时无回应）",
   "metric.drops.closed": "掉线（对端关闭）",
@@ -50,9 +56,15 @@
   "metric.echo_rtt.p95": "回显往返时延 p95",
   "metric.echo_rtt.p99": "回显往返时延 p99",
   "metric.dropped_session.mean": "掉线连接的平均存活时长",
+  "metric.host.fd_limit": "本机文件描述符上限",
+  "metric.host.ephemeral_ports": "本机临时端口数",
 
   "tcp_capacity.error.no_connection": "一条连接都没能建立：{dial_errors} 次拨号全部失败。最近一次的错误：{last_error}",
+  "tcp_capacity.error.no_connection_host_resource": "一条连接都没能建立：{dial_errors} 次拨号都因本机资源耗尽（文件描述符或临时端口用尽）而失败，问题在运行本工具的这台机器，不在网络。最近一次的错误：{last_error}",
   "tcp_capacity.warning.ended_before_connect": "测试在任何连接建立之前就结束了，没有可供判断的数据。",
+  "tcp_capacity.warning.host_resource": "{count} 次拨号因本机资源耗尽（文件描述符或临时端口用尽）而失败：测到的是运行本工具的这台机器的上限，不是网络的。",
+  "tcp_capacity.warning.fd_limit": "本机文件描述符上限是 {limit}，达不到 {target} 条连接所需：结果受本机限制，不反映网络。请调高 ulimit -n（含硬上限）或减少 -clients。",
+  "tcp_capacity.warning.port_range": "本机只有 {ports} 个临时端口，到同一个节点地址最多只能建这么多连接，低于目标 {target} 条：结果受本机限制，不反映网络。",
   "tcp_capacity.inference.silent_drops": "{count} 条连接没有收到关闭或重置就不再回应，这是 NAT 或其他中间设备悄悄丢弃连接状态的典型表现。",
   "tcp_capacity.inference.peer_closed": "{count} 条连接被对端关闭：可能是节点主动断开（空闲超时或连接数已满），也可能是中间设备代发了关闭。",
   "tcp_capacity.inference.reset_or_error": "{count} 条连接因重置或其他错误中断。",

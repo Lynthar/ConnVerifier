@@ -21,8 +21,13 @@
   "section.not_proven": "Not proven",
   "section.warnings": "Validity warnings",
   "section.error": "Error",
+  "confirm.prompt": "Continue? [y/N] ",
+  "confirm.declined": "Cancelled; no connection was made.",
+  "confirm.needs_yes": "stdin is not a terminal, so there is no way to confirm; add -yes to run anyway.",
 
   "check.tcp-capacity.title": "TCP long-lived connections",
+  "tcp_capacity.confirm.notice": "About to open and hold {connections} TCP connections to {node}, at most {rate} new ones per second, for {duration_ms}. This fills connection tables in your router and your provider's NAT; other devices on the same network may briefly lose connectivity.",
+  "tcp_capacity.confirm.notice_until_stopped": "About to open and hold {connections} TCP connections to {node}, at most {rate} new ones per second, until you stop it. This fills connection tables in your router and your provider's NAT; other devices on the same network may briefly lose connectivity.",
 
   "param.target_connections": "Target connections",
   "param.start_rate": "New connections per second, max",
@@ -38,6 +43,7 @@
 
   "metric.connects": "Connections made",
   "metric.dial_errors": "Failed dials",
+  "metric.dial_errors.host_resource": "Failed dials (host out of resources)",
   "metric.drops": "Drops",
   "metric.drops.timeout": "Drops (no reply in time)",
   "metric.drops.closed": "Drops (closed by peer)",
@@ -50,9 +56,15 @@
   "metric.echo_rtt.p95": "Echo round trip p95",
   "metric.echo_rtt.p99": "Echo round trip p99",
   "metric.dropped_session.mean": "Mean lifetime of dropped connections",
+  "metric.host.fd_limit": "Host open-file limit",
+  "metric.host.ephemeral_ports": "Host ephemeral ports",
 
   "tcp_capacity.error.no_connection": "No connection could be made; failed dials: {dial_errors}. Last error: {last_error}",
+  "tcp_capacity.error.no_connection_host_resource": "No connection could be made; all {dial_errors} dials failed because this host ran out of file descriptors or ephemeral ports — the machine running the tool, not the network. Last error: {last_error}",
   "tcp_capacity.warning.ended_before_connect": "The run ended before any connection completed; there is no data to judge.",
+  "tcp_capacity.warning.host_resource": "Dials that failed because this host ran out of file descriptors or ephemeral ports: {count}. The result shows this machine's limit, not the network's.",
+  "tcp_capacity.warning.fd_limit": "This host's open-file limit is {limit}, too low for {target} connections; the result is bounded by the host, not the network. Raise ulimit -n, including the hard limit, or lower -clients.",
+  "tcp_capacity.warning.port_range": "This host has {ports} ephemeral ports, which caps connections to one node address below the target of {target}; the result is bounded by the host, not the network.",
   "tcp_capacity.inference.silent_drops": "Connections that stopped answering without a close or reset: {count}. This is the usual sign of a NAT or other middlebox silently dropping connection state.",
   "tcp_capacity.inference.peer_closed": "Connections closed by the far side: {count}. Either the node ended them (idle timeout or connection limit) or a middlebox sent the close.",
   "tcp_capacity.inference.reset_or_error": "Connections ended by a reset or another error: {count}.",

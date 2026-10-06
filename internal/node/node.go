@@ -50,6 +50,12 @@ func Serve(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("listen failed: %w", err)
 	}
+	serve(ctx, listener, cfg)
+	return nil
+}
+
+// serve runs the accept loop on listener until ctx ends, then closes it.
+func serve(ctx context.Context, listener net.Listener, cfg Config) {
 	log.Printf("echo server listening on %s max_conns=%d idle_timeout=%s tcp_keepalive=%s",
 		listener.Addr(), cfg.maxConns, cfg.idleTimeout, cfg.tcpKeepAlive)
 
@@ -97,7 +103,6 @@ func Serve(ctx context.Context, cfg Config) error {
 	log.Printf("shutdown: stopped accepting; active=%d accepted=%d rejected=%d closed=%d",
 		atomic.LoadInt64(&stats.active), atomic.LoadUint64(&stats.accepted),
 		atomic.LoadUint64(&stats.rejected), atomic.LoadUint64(&stats.closed))
-	return nil
 }
 
 func reportStats(ctx context.Context, stats *Stats) {

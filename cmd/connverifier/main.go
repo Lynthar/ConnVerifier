@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -20,6 +21,8 @@ import (
 	"github.com/Lynthar/ConnVerifier/internal/probe/capacity"
 	"github.com/Lynthar/ConnVerifier/internal/report"
 	"github.com/Lynthar/ConnVerifier/internal/result"
+	"github.com/Lynthar/ConnVerifier/internal/runner"
+	"golang.org/x/term"
 )
 
 const usage = `usage: connverifier <command> [flags]
@@ -32,7 +35,8 @@ commands:
 Run "connverifier <command> -h" for the flags of a command.
 
 Exit status: 0 when the run completed, 1 when a check obtained no valid
-measurement or the tool failed, 2 for invalid flags.
+measurement or the tool failed, 2 when nothing ran: invalid flags, or a
+stress check that was not confirmed.
 `
 
 func main() {
@@ -49,12 +53,15 @@ func main() {
 	case "capacity":
 		var cfg capacity.Config
 		var out output
+		var yes bool
 		parse(cmd, args, func(fs *flag.FlagSet) {
 			cfg.RegisterFlags(fs)
 			out.register(fs)
+			fs.BoolVar(&yes, "yes", false, "start without the confirmation prompt (required when stdin is not a terminal)")
 		})
 		invalidIf(cfg.Validate())
 		invalidIf(out.resolve())
+		confirm(out.cat, cfg.Notice(), yes)
 		started := time.Now()
 		check, err := capacity.Run(ctx, cfg)
 		if err != nil {
@@ -94,6 +101,22 @@ func parse(name string, args []string, register func(*flag.FlagSet)) {
 		fs.Usage()
 		os.Exit(2)
 	}
+}
+
+// confirm runs the stress-check prompt on stderr, keeping stdout for the result,
+// and exits 2 unless the user agrees.
+func confirm(cat *i18n.Catalog, notice result.Message, yes bool) {
+	interactive := term.IsTerminal(int(os.Stdin.Fd()))
+	err := runner.Confirm(os.Stdin, os.Stderr, interactive, yes, report.Message(cat, notice), cat.Text("confirm.prompt", nil))
+	switch {
+	case err == nil:
+		return
+	case errors.Is(err, runner.ErrNeedsYes):
+		fmt.Fprintln(os.Stderr, cat.Text("confirm.needs_yes", nil))
+	default:
+		fmt.Fprintln(os.Stderr, cat.Text("confirm.declined", nil))
+	}
+	os.Exit(2)
 }
 
 func invalidIf(err error) {

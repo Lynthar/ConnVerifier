@@ -7,7 +7,7 @@ A Go tool that holds thousands of idle TCP connections to find where NAT drops t
 English | [简体中文](README.zh-CN.md)
 
 > **Under construction.** It does what's described below and the tests pass, but
-> there's no release and no CI — you build it from source.
+> there's no release yet — you build it from source.
 
 Carriers and home routers quietly forget idle TCP connections. This finds out
 when. `connverifier serve` echoes bytes back; `connverifier capacity` opens as
@@ -35,7 +35,10 @@ go build -o bin/connverifier ./cmd/connverifier
 ```
 
 Raise the file descriptor limit on **both** machines before running anything
-sizeable — one connection is one descriptor.
+sizeable — one connection is one descriptor. If the client's limit or its
+ephemeral port range is below the target, or dials fail for lack of either, the
+result is marked `INVALID`: it would show the client machine's limit, not the
+network's.
 
 ## Usage
 
@@ -44,7 +47,10 @@ ulimit -n 20480
 ./bin/connverifier serve -addr :9000 -max-conns 20000 -idle-timeout 2m
 ```
 
-On the other side:
+On the other side. `capacity` first says how many connections it will open and
+asks for confirmation on the terminal, because filling the NAT table can cut off
+other devices on the same network; `-yes` skips the question and is required when
+stdin is not a terminal:
 
 ```bash
 ./bin/connverifier capacity -addr <server>:9000 -clients 10000 -start-rate 500 -heartbeat 30s
@@ -53,7 +59,7 @@ On the other side:
 For an unattended run that stops on its own:
 
 ```bash
-./bin/connverifier capacity -addr <server>:9000 -clients 1000 -duration 1h
+./bin/connverifier capacity -addr <server>:9000 -clients 1000 -duration 1h -yes
 ```
 
 While it runs, a progress line goes to stderr once a second:
@@ -92,7 +98,7 @@ Everything is a flag; there's no config file and no environment variables.
 `capacity`: `-addr`, `-clients` (1000), `-start-rate` (100), `-heartbeat` (30s),
 `-dial-timeout` (5s), `-io-timeout` (5s), `-min-backoff` (500ms),
 `-max-backoff` (1m), `-tcp-keepalive` (0), `-duration` (0 = until interrupted),
-`-log-drops`, `-format` (text), `-lang`. `serve`: `-addr` (:9000), `-max-conns` (10000), `-idle-timeout`
+`-log-drops`, `-format` (text), `-lang`, `-yes`. `serve`: `-addr` (:9000), `-max-conns` (10000), `-idle-timeout`
 (2m), `-tcp-keepalive` (0), `-log-connections`. Zero or negative means disabled
 or unlimited.
 
@@ -107,7 +113,8 @@ mapping and quietly turn every result into "the NAT is fine".
 - **The exit code doesn't judge your network.** `0` means the run completed,
   whatever the statuses. `1` means a check obtained no valid measurement (status
   `ERROR` — for example, the node was unreachable) or the tool failed. `2` means
-  invalid flags. To gate on network quality, read the JSON.
+  nothing ran: invalid flags, or the confirmation was declined or missing. To
+  gate on network quality, read the JSON.
 - **Drops are found on the heartbeat, not instantly.** A `FIN` arriving between
   beats isn't noticed until the next one, so reported lifetimes are an upper
   bound and `active` runs slightly high.

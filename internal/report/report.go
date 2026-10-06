@@ -73,7 +73,7 @@ func writeCheck(b *strings.Builder, c result.Check, cat *i18n.Catalog) {
 		}
 		b.WriteString(cat.Text(section, nil) + "\n")
 		for _, m := range msgs {
-			b.WriteString("  - " + cat.Text(m.Key, messageParams(m.Params)) + "\n")
+			b.WriteString("  - " + Message(cat, m) + "\n")
 		}
 	}
 	messages("section.inferences", c.Inferences)
@@ -82,6 +82,12 @@ func writeCheck(b *strings.Builder, c result.Check, cat *i18n.Catalog) {
 	if c.Error != nil {
 		messages("section.error", []result.Message{*c.Error})
 	}
+}
+
+// Message renders one message in cat's language, formatting its parameters the
+// same way as everywhere else in the report.
+func Message(cat *i18n.Catalog, m result.Message) string {
+	return cat.Text(m.Key, messageParams(m.Params))
 }
 
 // messageParams formats numeric "_ms" parameters as durations, the same way

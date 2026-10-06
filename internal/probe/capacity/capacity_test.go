@@ -424,3 +424,31 @@ func TestDialLoggerDedup(t *testing.T) {
 		t.Fatalf("nil logger must not log")
 	}
 }
+
+func TestRefillIssuesExactRate(t *testing.T) {
+	const ticksPerSecond = 100
+	for _, rate := range []int{1, 7, 99, 100, 150, maxStartRate} {
+		for _, seconds := range []int{1, 3} {
+			carry, total := 0, 0
+			for i := 0; i < seconds*ticksPerSecond; i++ {
+				var n int
+				n, carry = refill(carry, rate, ticksPerSecond)
+				total += n
+				if carry < 0 || carry >= ticksPerSecond {
+					t.Fatalf("rate %d: carry %d escaped [0, %d)", rate, carry, ticksPerSecond)
+				}
+			}
+			if total != rate*seconds {
+				t.Errorf("rate %d over %ds issued %d tokens, want %d", rate, seconds, total, rate*seconds)
+			}
+		}
+	}
+}
+
+func TestBucketCapacityIsTenthOfRate(t *testing.T) {
+	for rate, want := range map[int]int{1: 1, 9: 1, 10: 1, 100: 10, 1000: 100, maxStartRate: maxStartRate / 10} {
+		if got := bucketCapacity(rate); got != want {
+			t.Errorf("bucketCapacity(%d) = %d, want %d", rate, got, want)
+		}
+	}
+}

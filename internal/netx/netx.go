@@ -5,6 +5,7 @@ package netx
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"time"
@@ -46,4 +47,16 @@ func WriteFull(conn net.Conn, data []byte) error {
 		data = data[n:]
 	}
 	return nil
+}
+
+// IsClientResource reports whether a dial error means this host ran out of file
+// descriptors, ephemeral ports or socket buffers: a limit of the tool host, not
+// of the network under test.
+func IsClientResource(err error) bool {
+	for _, e := range resourceErrnos {
+		if errors.Is(err, e) {
+			return true
+		}
+	}
+	return false
 }

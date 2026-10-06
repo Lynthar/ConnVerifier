@@ -1,6 +1,6 @@
 TCP long-lived connections: attention (WARN)
 Node: 192.0.2.10:9000 · IPv4 · TCP
-Method version: 1
+Method version: 2
 Elapsed: 10 min
 Parameters
   Dial timeout: 1 s
@@ -15,6 +15,7 @@ Parameters
 Observed
   Connections made: 73
   Failed dials: 2
+  Failed dials (host out of resources): 0
   Drops: 31
   Drops (no reply in time): 3
   Drops (closed by peer): 1
@@ -27,6 +28,8 @@ Observed
   Echo round trip p95: 309 µs (40 samples)
   Echo round trip p99: too few samples (40)
   Mean lifetime of dropped connections: 45 s (31 samples)
+  Host open-file limit: 10240
+  Host ephemeral ports: 16384
 Inferred
   - Connections that stopped answering without a close or reset: 3. This is the usual sign of a NAT or other middlebox silently dropping connection state.
   - Connections closed by the far side: 1. Either the node ended them (idle timeout or connection limit) or a middlebox sent the close.

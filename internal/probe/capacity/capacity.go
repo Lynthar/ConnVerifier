@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Lynthar/ConnVerifier/internal/netenv"
 	"github.com/Lynthar/ConnVerifier/internal/netx"
 	"github.com/Lynthar/ConnVerifier/internal/result"
 )
@@ -28,6 +29,10 @@ const maxClients = 1000000
 const limiterTick = 10 * time.Millisecond
 const dialLogWindow = 10 * time.Second
 
+// fdReserve is the descriptors a run needs besides its connections: stdio, the
+// runtime's poller and the like.
+const fdReserve = 32
+
 // errBadAck marks a heartbeat reply that did not match the ping payload.
 var errBadAck = errors.New("bad heartbeat ack")
 
@@ -36,14 +41,9 @@ type RateLimiter struct {
 }
 
 // newRateLimiter refills in limiterTick batches via integer carry — a per-token
-// ticker needs sub-100µs ticks at high rates and weak CPUs miss them. Capacity
-// is 100ms worth of tokens so an idle spell cannot bank a burst past the rate.
+// ticker needs sub-100µs ticks at high rates and weak CPUs miss them.
 func newRateLimiter(ctx context.Context, rate int) *RateLimiter {
-	capacity := rate / 10
-	if capacity < 1 {
-		capacity = 1
-	}
-	rl := &RateLimiter{tokens: make(chan struct{}, capacity)}
+	rl := &RateLimiter{tokens: make(chan struct{}, bucketCapacity(rate))}
 	go func() {
 		ticksPerSecond := int(time.Second / limiterTick)
 		ticker := time.NewTicker(limiterTick)
@@ -54,8 +54,9 @@ func newRateLimiter(ctx context.Context, rate int) *RateLimiter {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				carry += rate
-				for ; carry >= ticksPerSecond; carry -= ticksPerSecond {
+				var n int
+				n, carry = refill(carry, rate, ticksPerSecond)
+				for ; n > 0; n-- {
 					select {
 					case rl.tokens <- struct{}{}:
 					default: // bucket full: the excess token is discarded
@@ -66,6 +67,19 @@ func newRateLimiter(ctx context.Context, rate int) *RateLimiter {
 	}()
 
 	return rl
+}
+
+// bucketCapacity holds 100ms worth of tokens: a full one-second bucket plus a
+// second of refill would let a burst after an idle spell reach twice the rate.
+func bucketCapacity(rate int) int {
+	return max(1, rate/10)
+}
+
+// refill returns the tokens due this tick and the remainder carried to the next,
+// so ticksPerSecond ticks issue exactly rate tokens with no drift.
+func refill(carry, rate, ticksPerSecond int) (tokens, nextCarry int) {
+	carry += rate
+	return carry / ticksPerSecond, carry % ticksPerSecond
 }
 
 func (rl *RateLimiter) Wait(ctx context.Context) bool {
@@ -96,12 +110,14 @@ type Config struct {
 	tcpKeepAlive      time.Duration
 	duration          time.Duration
 	logDrops          bool
+	dial              func(ctx context.Context, network, address string) (net.Conn, error) // nil: netx
 }
 
 type Stats struct {
 	dialAttempts      uint64
 	connections       uint64
 	dialErrors        uint64
+	dialErrorsHost    uint64
 	dropTimeouts      uint64
 	dropClosed        uint64
 	dropErrors        uint64
@@ -114,17 +130,37 @@ type Stats struct {
 	lastDialError     atomic.Pointer[string]
 	family            atomic.Pointer[string]
 	rtt               *rttHistogram
+	host              hostLimits // set before any goroutine starts, read-only after
+}
+
+// hostLimits are the tool host's own bounds on connection count; a zero field
+// means the platform could not report it.
+type hostLimits struct {
+	fdLimit        uint64
+	ephemeralPorts int
+}
+
+func readHostLimits() hostLimits {
+	var h hostLimits
+	if n, ok := netenv.FDLimit(); ok {
+		h.fdLimit = n
+	}
+	if n, ok := netenv.EphemeralPorts(); ok {
+		h.ephemeralPorts = n
+	}
+	return h
 }
 
 // snapshot is one read of the counters. Drops are not counted separately but
 // derived from the four buckets, so the total always equals their sum.
 type snapshot struct {
-	dialAttempts, connects, dialErrors                uint64
-	dropTimeouts, dropClosed, dropErrors, dropBadAcks uint64
-	heartbeatsSent, heartbeatsAck, intervalAcks       uint64
-	sessionNanos                                      uint64
-	active                                            int64
-	lastDialError, family                             string
+	dialAttempts, connects, dialErrors, dialErrorsHost uint64
+	dropTimeouts, dropClosed, dropErrors, dropBadAcks  uint64
+	heartbeatsSent, heartbeatsAck, intervalAcks        uint64
+	sessionNanos                                       uint64
+	active                                             int64
+	lastDialError, family                              string
+	host                                               hostLimits
 }
 
 func (s snapshot) drops() uint64 {
@@ -136,6 +172,7 @@ func (st *Stats) snapshot() snapshot {
 		dialAttempts:   atomic.LoadUint64(&st.dialAttempts),
 		connects:       atomic.LoadUint64(&st.connections),
 		dialErrors:     atomic.LoadUint64(&st.dialErrors),
+		dialErrorsHost: atomic.LoadUint64(&st.dialErrorsHost),
 		dropTimeouts:   atomic.LoadUint64(&st.dropTimeouts),
 		dropClosed:     atomic.LoadUint64(&st.dropClosed),
 		dropErrors:     atomic.LoadUint64(&st.dropErrors),
@@ -145,6 +182,7 @@ func (st *Stats) snapshot() snapshot {
 		intervalAcks:   atomic.LoadUint64(&st.intervalAcks),
 		sessionNanos:   atomic.LoadUint64(&st.sessionNanos),
 		active:         atomic.LoadInt64(&st.activeConnections),
+		host:           st.host,
 	}
 	if p := st.lastDialError.Load(); p != nil {
 		s.lastDialError = *p
@@ -185,11 +223,14 @@ func Run(ctx context.Context, cfg Config) (result.Check, error) {
 	}
 	cfg.dialLimiter = newRateLimiter(ctx, cfg.startRate)
 	cfg.dialLog = newDialLogger()
+	if cfg.dial == nil {
+		cfg.dial = netx.Dialer(cfg.dialTimeout, cfg.tcpKeepAlive).DialContext
+	}
 
 	log.Printf("starting client: target=%d heartbeat=%s server=%s start_rate=%d tcp_keepalive=%s",
 		cfg.targetConnections, cfg.heartbeat, cfg.address, cfg.startRate, cfg.tcpKeepAlive)
 
-	stats := &Stats{rtt: newRttHistogram()}
+	stats := &Stats{rtt: newRttHistogram(), host: readHostLimits()}
 	final := make(chan finalStats, 1)
 	go reportStats(ctx, cfg, stats, final)
 
@@ -205,7 +246,50 @@ func Run(ctx context.Context, cfg Config) (result.Check, error) {
 	return buildCheck(cfg, f, stats.rtt, time.Since(start)), nil
 }
 
+// Notice describes what the run will do to the network, for the confirmation the
+// user must give before a stress check starts.
+func (cfg Config) Notice() result.Message {
+	key := "tcp_capacity.confirm.notice"
+	if cfg.duration <= 0 {
+		key = "tcp_capacity.confirm.notice_until_stopped"
+	}
+	return result.Message{Key: key, Params: map[string]any{
+		"node":        cfg.address,
+		"connections": cfg.targetConnections,
+		"rate":        cfg.startRate,
+		"duration_ms": cfg.duration.Milliseconds(),
+	}}
+}
+
 // params records the settings in effect, with "disabled" normalized to 0.
+// hostLimitWarnings lists the ways the tool host, not the network, bounded the run:
+// dials refused for lack of descriptors or ports, or limits below the target.
+func hostLimitWarnings(s snapshot, target int) []result.Message {
+	var w []result.Message
+	if s.dialErrorsHost > 0 {
+		w = append(w, result.Message{
+			Key:    "tcp_capacity.warning.host_resource",
+			Params: map[string]any{"count": s.dialErrorsHost},
+			Basis:  []string{"dial_errors.host_resource"},
+		})
+	}
+	if s.host.fdLimit > 0 && s.host.fdLimit < uint64(target)+fdReserve {
+		w = append(w, result.Message{
+			Key:    "tcp_capacity.warning.fd_limit",
+			Params: map[string]any{"limit": s.host.fdLimit, "target": target},
+			Basis:  []string{"host.fd_limit"},
+		})
+	}
+	if s.host.ephemeralPorts > 0 && s.host.ephemeralPorts < target {
+		w = append(w, result.Message{
+			Key:    "tcp_capacity.warning.port_range",
+			Params: map[string]any{"ports": s.host.ephemeralPorts, "target": target},
+			Basis:  []string{"host.ephemeral_ports"},
+		})
+	}
+	return w
+}
+
 func (cfg Config) params() map[string]any {
 	keepAlive := cfg.tcpKeepAlive
 	if keepAlive < 0 {
@@ -232,13 +316,14 @@ func buildCheck(cfg Config, f finalStats, h *rttHistogram, elapsed time.Duration
 	s := f.snap
 	c := result.Check{
 		ID:            "tcp-capacity",
-		MethodVersion: 1,
+		MethodVersion: 2,
 		Path:          result.Path{Node: cfg.address, Family: s.family, Protocol: "tcp"},
 		Params:        cfg.params(),
 		ElapsedMs:     elapsed.Milliseconds(),
 		Metrics: []result.Metric{
 			result.Count("connects", s.connects),
 			result.Count("dial_errors", s.dialErrors),
+			result.Count("dial_errors.host_resource", s.dialErrorsHost),
 			result.Count("drops", s.drops()),
 			result.Count("drops.timeout", s.dropTimeouts),
 			result.Count("drops.closed", s.dropClosed),
@@ -255,7 +340,13 @@ func buildCheck(cfg Config, f finalStats, h *rttHistogram, elapsed time.Duration
 	if drops := s.drops(); drops > 0 {
 		c.Metrics = append(c.Metrics, result.Millis("dropped_session.mean", time.Duration(s.sessionNanos/drops), drops))
 	}
-	evaluate(&c, s, cfg.heartbeat)
+	if s.host.fdLimit > 0 {
+		c.Metrics = append(c.Metrics, result.Count("host.fd_limit", s.host.fdLimit))
+	}
+	if s.host.ephemeralPorts > 0 {
+		c.Metrics = append(c.Metrics, result.Count("host.ephemeral_ports", uint64(s.host.ephemeralPorts)))
+	}
+	evaluate(&c, s, cfg)
 	return c
 }
 
@@ -269,17 +360,21 @@ func quantileMetric(h *rttHistogram, counts []uint64, total uint64, p int) resul
 	return result.Millis(id, h.quantile(counts, total, float64(p)/100), total)
 }
 
-// evaluate sets status and messages from the counters alone. No connects means
-// ERROR when dials failed and INVALID when none did; otherwise any drop, and no
-// interval heartbeat ever acked, each make it WARN, and neither leaves it PASS.
-func evaluate(c *result.Check, s snapshot, heartbeat time.Duration) {
+// evaluate sets status and messages from the snapshot alone. No connects means
+// ERROR when dials failed and INVALID when none did; a host limit makes the data
+// INVALID; otherwise any drop, or no interval heartbeat ever acked, makes it WARN.
+func evaluate(c *result.Check, s snapshot, cfg Config) {
 	if s.connects == 0 {
 		if s.dialErrors > 0 {
+			key := "tcp_capacity.error.no_connection"
+			if s.dialErrorsHost == s.dialErrors {
+				key = "tcp_capacity.error.no_connection_host_resource"
+			}
 			c.Status = result.Error
 			c.Error = &result.Message{
-				Key:    "tcp_capacity.error.no_connection",
+				Key:    key,
 				Params: map[string]any{"dial_errors": s.dialErrors, "last_error": s.lastDialError},
-				Basis:  []string{"connects", "dial_errors"},
+				Basis:  []string{"connects", "dial_errors", "dial_errors.host_resource"},
 			}
 			return
 		}
@@ -291,8 +386,14 @@ func evaluate(c *result.Check, s snapshot, heartbeat time.Duration) {
 		return
 	}
 
+	if w := hostLimitWarnings(s, cfg.targetConnections); len(w) > 0 {
+		c.Status = result.Invalid
+		c.Warnings = append(c.Warnings, w...)
+		return
+	}
+
 	c.Status = result.Pass
-	heartbeatMs := map[string]any{"heartbeat_ms": heartbeat.Milliseconds()}
+	heartbeatMs := map[string]any{"heartbeat_ms": cfg.heartbeat.Milliseconds()}
 	if s.drops() > 0 {
 		c.Status = result.Warn
 		buckets := []struct {
@@ -475,12 +576,15 @@ func (l *dialLogger) shouldLog(msg string, now time.Time) bool {
 
 func dialWithStats(ctx context.Context, cfg Config, stats *Stats) (net.Conn, error) {
 	atomic.AddUint64(&stats.dialAttempts, 1)
-	conn, err := netx.Dialer(cfg.dialTimeout, cfg.tcpKeepAlive).DialContext(ctx, "tcp", cfg.address)
+	conn, err := cfg.dial(ctx, "tcp", cfg.address)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, err // shutdown cancellation, not a dial failure
 		}
 		atomic.AddUint64(&stats.dialErrors, 1)
+		if netx.IsClientResource(err) {
+			atomic.AddUint64(&stats.dialErrorsHost, 1)
+		}
 		msg := err.Error()
 		stats.lastDialError.Store(&msg)
 		if cfg.dialLog.shouldLog(msg, time.Now()) {

@@ -6,7 +6,7 @@ version follows.
 
 | Check id | Method version | Document |
 |---|---|---|
-| `tcp-capacity` | 1 | [tcp-capacity.md](tcp-capacity.md) |
+| `tcp-capacity` | 2 | [tcp-capacity.md](tcp-capacity.md) |
 
 ## What each method document answers
 
