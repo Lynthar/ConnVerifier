@@ -42,7 +42,7 @@ func (cfg *Config) RegisterFlags(fs *flag.FlagSet) {
 // Serve accepts and echoes connections until ctx ends. It returns an error when
 // cfg is invalid or the listener cannot be opened; otherwise nil after shutdown.
 func Serve(ctx context.Context, cfg Config) error {
-	if err := validateConfig(cfg); err != nil {
+	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
@@ -119,7 +119,8 @@ func reportStats(ctx context.Context, stats *Stats) {
 	}
 }
 
-func validateConfig(cfg Config) error {
+// Validate reports the first setting that is out of range.
+func (cfg Config) Validate() error {
 	if cfg.address == "" {
 		return fmt.Errorf("addr must not be empty")
 	}

@@ -2,17 +2,24 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"syscall"
+	"time"
 
+	"github.com/Lynthar/ConnVerifier/internal/i18n"
 	"github.com/Lynthar/ConnVerifier/internal/node"
 	"github.com/Lynthar/ConnVerifier/internal/probe/capacity"
+	"github.com/Lynthar/ConnVerifier/internal/report"
+	"github.com/Lynthar/ConnVerifier/internal/result"
 )
 
 const usage = `usage: connverifier <command> [flags]
@@ -23,6 +30,9 @@ commands:
   version    print the build version
 
 Run "connverifier <command> -h" for the flags of a command.
+
+Exit status: 0 when the run completed, 1 when a check obtained no valid
+measurement or the tool failed, 2 for invalid flags.
 `
 
 func main() {
@@ -35,28 +45,42 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	var err error
 	switch cmd {
 	case "capacity":
 		var cfg capacity.Config
-		parse(cmd, args, cfg.RegisterFlags)
-		err = capacity.Run(ctx, cfg)
+		var out output
+		parse(cmd, args, func(fs *flag.FlagSet) {
+			cfg.RegisterFlags(fs)
+			out.register(fs)
+		})
+		invalidIf(cfg.Validate())
+		invalidIf(out.resolve())
+		started := time.Now()
+		check, err := capacity.Run(ctx, cfg)
+		if err != nil {
+			log.Fatal(err)
+		}
+		run := newRun(started, time.Now(), check)
+		if err := out.write(os.Stdout, run); err != nil {
+			log.Fatal(err)
+		}
+		stop()
+		os.Exit(run.ExitCode())
 	case "serve":
 		var cfg node.Config
 		parse(cmd, args, cfg.RegisterFlags)
-		err = node.Serve(ctx, cfg)
+		invalidIf(cfg.Validate())
+		if err := node.Serve(ctx, cfg); err != nil {
+			log.Fatal(err)
+		}
 	case "version":
 		parse(cmd, args, func(*flag.FlagSet) {})
-		info, _ := debug.ReadBuildInfo()
-		fmt.Printf("connverifier %s %s %s/%s\n", buildVersion(info), runtime.Version(), runtime.GOOS, runtime.GOARCH)
+		fmt.Printf("connverifier %s %s %s/%s\n", buildVersion(), runtime.Version(), runtime.GOOS, runtime.GOARCH)
 	case "help", "-h", "-help", "--help":
 		fmt.Fprint(os.Stdout, usage)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", cmd, usage)
 		os.Exit(2)
-	}
-	if err != nil {
-		log.Fatal(err)
 	}
 }
 
@@ -72,9 +96,81 @@ func parse(name string, args []string, register func(*flag.FlagSet)) {
 	}
 }
 
-// buildVersion reports the module version stamped by the go command, falling back
+func invalidIf(err error) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "invalid configuration: %v\n", err)
+		os.Exit(2)
+	}
+}
+
+// output holds the flags that choose how a result is written.
+type output struct {
+	format string
+	lang   string
+	cat    *i18n.Catalog
+}
+
+func (o *output) register(fs *flag.FlagSet) {
+	fs.StringVar(&o.format, "format", "text", "result format: text or json")
+	fs.StringVar(&o.lang, "lang", "", "report language: "+strings.Join(i18n.Supported, " or ")+" (default: from LC_ALL, LC_MESSAGES or LANG, else "+i18n.Default+")")
+}
+
+// resolve rejects unknown values rather than ignoring them and loads the catalog.
+func (o *output) resolve() error {
+	if o.format != "text" && o.format != "json" {
+		return fmt.Errorf("format must be text or json, got %q", o.format)
+	}
+	lang := i18n.Detect(os.Getenv)
+	if o.lang != "" {
+		l, ok := i18n.Normalize(o.lang)
+		if !ok {
+			return fmt.Errorf("lang must be %s, got %q", strings.Join(i18n.Supported, " or "), o.lang)
+		}
+		lang = l
+	}
+	cat, err := i18n.Load(lang)
+	if err != nil {
+		return err
+	}
+	o.cat = cat
+	return nil
+}
+
+func (o *output) write(w io.Writer, run result.Run) error {
+	if o.format == "json" {
+		return report.JSON(w, run)
+	}
+	return report.Text(w, run, o.cat)
+}
+
+// newRun wraps checks in the run envelope. The run ID is random per run, so nothing
+// ties two runs together.
+func newRun(started, ended time.Time, checks ...result.Check) result.Run {
+	return result.Run{
+		Schema: result.Schema,
+		Tool: result.Tool{
+			Name:    "connverifier",
+			Version: buildVersion(),
+			Go:      runtime.Version(),
+			OS:      runtime.GOOS,
+			Arch:    runtime.GOARCH,
+		},
+		RunID:     rand.Text(),
+		Started:   started.UTC(),
+		Ended:     ended.UTC(),
+		ElapsedMs: ended.Sub(started).Milliseconds(),
+		Checks:    checks,
+	}
+}
+
+func buildVersion() string {
+	info, _ := debug.ReadBuildInfo()
+	return versionOf(info)
+}
+
+// versionOf reports the module version stamped by the go command, falling back
 // to the VCS revision for local builds that carry no version.
-func buildVersion(info *debug.BuildInfo) string {
+func versionOf(info *debug.BuildInfo) string {
 	if info == nil {
 		return "unknown"
 	}

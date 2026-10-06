@@ -1,0 +1,36 @@
+TCP long-lived connections: attention (WARN)
+Node: 192.0.2.10:9000 · IPv4 · TCP
+Method version: 1
+Elapsed: 10 min
+Parameters
+  Dial timeout: 1 s
+  Test duration: 10 min
+  Heartbeat interval: 30 s
+  Heartbeat reply timeout: 1 s
+  Maximum reconnect wait: 1 s
+  Minimum reconnect wait: 100 ms
+  New connections per second, max: 1
+  Target connections: 50
+  TCP keepalive: off
+Observed
+  Connections made: 73
+  Failed dials: 2
+  Drops: 31
+  Drops (no reply in time): 3
+  Drops (closed by peer): 1
+  Drops (reset or error): 27
+  Drops (wrong reply): 0
+  Heartbeats sent: 233
+  Heartbeats acknowledged: 200
+  Heartbeats acknowledged after a full idle interval: 120
+  Echo round trip p50: 211 µs (40 samples)
+  Echo round trip p95: 309 µs (40 samples)
+  Echo round trip p99: too few samples (40)
+  Mean lifetime of dropped connections: 45 s (31 samples)
+Inferred
+  - Connections that stopped answering without a close or reset: 3. This is the usual sign of a NAT or other middlebox silently dropping connection state.
+  - Connections closed by the far side: 1. Either the node ended them (idle timeout or connection limit) or a middlebox sent the close.
+  - Connections ended by a reset or another error: 27.
+Not proven
+  - A node turning connections away at its limit cannot be told apart from the network dropping them; the client sees the same thing.
+  - Drops are only noticed at the next heartbeat, so lifetimes are upper bounds, long by up to one heartbeat interval (30 s).

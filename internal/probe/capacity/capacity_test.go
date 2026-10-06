@@ -27,7 +27,7 @@ func validClientConfig() Config {
 
 func TestValidateConfig(t *testing.T) {
 	cfg := validClientConfig()
-	if err := validateConfig(cfg); err != nil {
+	if err := cfg.Validate(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
 	}
 
@@ -51,7 +51,7 @@ func TestValidateConfig(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := validClientConfig()
 			tt.update(&cfg)
-			if err := validateConfig(cfg); err == nil {
+			if err := cfg.Validate(); err == nil {
 				t.Fatalf("invalid config accepted")
 			}
 		})
@@ -136,14 +136,11 @@ func TestSendHeartbeatRejectsBadAck(t *testing.T) {
 	stats := &Stats{}
 	ping := []byte(pingPayload)
 	response := make([]byte, len(ping))
-	if err := sendHeartbeat(client, validClientConfig(), ping, response, stats); err == nil {
-		t.Fatalf("sendHeartbeat accepted a bad ack")
+	if err := sendHeartbeat(client, validClientConfig(), ping, response, stats); !errors.Is(err, errBadAck) {
+		t.Fatalf("sendHeartbeat error = %v, want errBadAck", err)
 	}
 	if err := <-done; err != nil {
 		t.Fatalf("server side failed: %v", err)
-	}
-	if got := atomic.LoadUint64(&stats.badAcks); got != 1 {
-		t.Fatalf("badAcks = %d, want 1", got)
 	}
 	if got := atomic.LoadUint64(&stats.heartbeatsAck); got != 0 {
 		t.Fatalf("heartbeatsAck = %d, want 0", got)
@@ -168,6 +165,7 @@ func TestRecordDropReason(t *testing.T) {
 		{"unexpected eof", io.ErrUnexpectedEOF, func(s *Stats) uint64 { return s.dropClosed }},
 		{"wrapped eof", fmt.Errorf("read: %w", io.EOF), func(s *Stats) uint64 { return s.dropClosed }},
 		{"other", errors.New("connection reset by peer"), func(s *Stats) uint64 { return s.dropErrors }},
+		{"bad ack", fmt.Errorf("%w: got %q want %q", errBadAck, "PONG", "PING"), func(s *Stats) uint64 { return s.badAcks }},
 	}
 
 	for _, tt := range tests {
@@ -177,21 +175,27 @@ func TestRecordDropReason(t *testing.T) {
 			if got := tt.want(stats); got != 1 {
 				t.Fatalf("expected reason bucket = 1, got %d", got)
 			}
-			if total := stats.dropTimeouts + stats.dropClosed + stats.dropErrors; total != 1 {
+			if total := stats.snapshot().drops(); total != 1 {
 				t.Fatalf("expected exactly one bucket incremented, got total %d", total)
 			}
 		})
 	}
 }
 
-func TestRecordDropReasonSkipsBadAckAndNil(t *testing.T) {
+// The drop total is derived from the buckets, so it equals their sum by
+// construction; this pins that no drop kind bypasses the buckets.
+func TestSnapshotDropsEqualBuckets(t *testing.T) {
 	stats := &Stats{}
-	recordDropReason(nil, stats)
-	recordDropReason(errBadAck, stats)
-	recordDropReason(fmt.Errorf("%w: got %q want %q", errBadAck, "PONG", "PING"), stats)
-
-	if total := stats.dropTimeouts + stats.dropClosed + stats.dropErrors; total != 0 {
-		t.Fatalf("nil and bad-ack errors should not bucket as timeout/closed/error, got %d", total)
+	for _, err := range []error{
+		fakeTimeoutError{}, io.EOF, errors.New("connection reset by peer"),
+		fmt.Errorf("%w: got %q want %q", errBadAck, "PONG", "PING"), nil,
+	} {
+		recordDropReason(err, stats)
+	}
+	s := stats.snapshot()
+	sum := s.dropTimeouts + s.dropClosed + s.dropErrors + s.dropBadAcks
+	if s.drops() != sum || sum != 5 {
+		t.Fatalf("drops = %d, bucket sum = %d, want both 5", s.drops(), sum)
 	}
 }
 
@@ -361,12 +365,16 @@ func TestMaintainReportsIntervalSurvival(t *testing.T) {
 			cfg.heartbeat = 20 * time.Millisecond
 			ping := []byte(pingPayload)
 			response := make([]byte, len(ping))
-			survived, err := maintain(context.Background(), client, cfg, ping, response, &Stats{})
+			stats := &Stats{}
+			survived, err := maintain(context.Background(), client, cfg, ping, response, stats)
 			if err == nil {
 				t.Fatalf("maintain returned nil error on a closed pipe")
 			}
 			if survived != tt.survived {
 				t.Fatalf("survived = %v, want %v", survived, tt.survived)
+			}
+			if got, want := stats.snapshot().intervalAcks, uint64(tt.echoes-1); got != want {
+				t.Fatalf("intervalAcks = %d, want %d", got, want)
 			}
 		})
 	}

@@ -10,12 +10,12 @@ import (
 
 func TestValidateConfig(t *testing.T) {
 	cfg := Config{address: "127.0.0.1:9000"}
-	if err := validateConfig(cfg); err != nil {
+	if err := cfg.Validate(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
 	}
 
 	cfg.address = ""
-	if err := validateConfig(cfg); err == nil {
+	if err := cfg.Validate(); err == nil {
 		t.Fatalf("empty address accepted")
 	}
 }

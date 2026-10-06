@@ -52,17 +52,38 @@ ulimit -n 20480
 ./bin/connverifier capacity -addr <服务端>:9000 -clients 1000 -duration 1h
 ```
 
-输出长这样，每秒一行，结束时另有一份总结：
+运行中每秒往 stderr 打一行进度：
 
 ```
 stats target=50 active=50 dial_attempts=50 connects=50 dial_errors=0 drops=0
   heartbeats=100 ack=100 rtt_p50=159µs rtt_p95=255µs rtt_p99=255µs
 ```
 
+结束时结果写到 stdout，默认是文本，`-format json` 则输出 JSON。节选：
+
+```
+TCP 长连接容量：注意（WARN）
+节点：192.0.2.10:9000 · IPv4 · TCP
+观测
+  成功建连：73
+  掉线：31
+  掉线（超时无回应）：3
+  回显往返时延 p95：309 µs（40 个样本）
+  回显往返时延 p99：样本不足（40 个样本）
+推断
+  - 3 条连接没有收到关闭或重置就不再回应，这是 NAT 或其他中间设备悄悄丢弃连接状态的典型表现。
+未能证明
+  - 无法区分节点满载后的拒绝与网络造成的中断，两者在客户端看来是一样的。
+```
+
+文本语言跟随 `LC_ALL`、`LC_MESSAGES` 或 `LANG`，支持中文和英文，其余一律用中文；
+`-lang en` 或 `-lang zh-CN` 可以覆盖。每个状态和数字是什么意思、什么时候不该信，见
+[docs/methods](docs/methods/README.md)（英文）。
+
 全部走旗标，没有配置文件，没有环境变量。`capacity`：`-addr`、`-clients`（1000）、
 `-start-rate`（100）、`-heartbeat`（30s）、`-dial-timeout`（5s）、`-io-timeout`（5s）、
 `-min-backoff`（500ms）、`-max-backoff`（1m）、`-tcp-keepalive`（0）、
-`-duration`（0＝直到中断）、`-log-drops`。`serve`：`-addr`（:9000）、`-max-conns`（10000）、
+`-duration`（0＝直到中断）、`-log-drops`、`-format`（text）、`-lang`。`serve`：`-addr`（:9000）、`-max-conns`（10000）、
 `-idle-timeout`（2m）、`-tcp-keepalive`（0）、`-log-connections`。零或负数一律表示
 「禁用 / 无限」。
 
@@ -72,9 +93,10 @@ stats target=50 active=50 dial_attempts=50 connects=50 dial_errors=0 drops=0
 ## 能力边界
 
 - **只测 TCP。** 没有 UDP、没有 STUN、没有 DNS、不测带宽。
-- **没有 JSON 输出，输出格式也不稳定。** 拿脚本解析文本，格式一改就坏。
-- **退出码不评判网络质量。** 0 只表示「跑完了」，非零是工具自己出错。
-  拿它在 CI 里当健康门禁，会永远绿。
+- **JSON 的 schema 还是 `v0`。** 不同构建之间仍可能变；要解析就固定一个构建，别解析文本。
+- **退出码不评判网络质量。** 0 表示跑完了，不管各项状态如何；1 表示有检查没拿到有效
+  测量（状态 `ERROR`，比如节点连不上），或工具自己出错；2 表示参数不对。要按网络质量
+  设门禁，读 JSON。
 - **掉线是靠心跳发现的，不是即时的。** 两次心跳之间到达的 `FIN` 要等下一拍才被看见，
   所以报出来的存活时长是上界，`active` 会短暂偏高。
 - **服务端满载拒绝会伪装成客户端故障。** TCP 握手在拒绝之前就完成了，表现为

@@ -1,0 +1,160 @@
+{
+  "schema": "connverifier.result/v0",
+  "tool": {
+    "name": "connverifier",
+    "version": "v0.0.0-test",
+    "go": "go1.x",
+    "os": "linux",
+    "arch": "amd64"
+  },
+  "run_id": "TESTRUNID",
+  "started": "2026-01-02T03:04:05Z",
+  "ended": "2026-01-02T03:14:05.012Z",
+  "elapsed_ms": 600012,
+  "checks": [
+    {
+      "id": "tcp-capacity",
+      "method_version": 1,
+      "status": "WARN",
+      "path": {
+        "node": "192.0.2.10:9000",
+        "family": "ipv4",
+        "protocol": "tcp"
+      },
+      "params": {
+        "dial_timeout_ms": 1000,
+        "duration_ms": 600000,
+        "heartbeat_ms": 30000,
+        "io_timeout_ms": 1000,
+        "max_backoff_ms": 1000,
+        "min_backoff_ms": 100,
+        "start_rate": 1,
+        "target_connections": 50,
+        "tcp_keepalive_ms": 0
+      },
+      "elapsed_ms": 600012,
+      "metrics": [
+        {
+          "id": "connects",
+          "unit": "count",
+          "value": 73
+        },
+        {
+          "id": "dial_errors",
+          "unit": "count",
+          "value": 2
+        },
+        {
+          "id": "drops",
+          "unit": "count",
+          "value": 31
+        },
+        {
+          "id": "drops.timeout",
+          "unit": "count",
+          "value": 3
+        },
+        {
+          "id": "drops.closed",
+          "unit": "count",
+          "value": 1
+        },
+        {
+          "id": "drops.error",
+          "unit": "count",
+          "value": 27
+        },
+        {
+          "id": "drops.bad_ack",
+          "unit": "count",
+          "value": 0
+        },
+        {
+          "id": "heartbeats.sent",
+          "unit": "count",
+          "value": 233
+        },
+        {
+          "id": "heartbeats.acked",
+          "unit": "count",
+          "value": 200
+        },
+        {
+          "id": "heartbeats.interval_acked",
+          "unit": "count",
+          "value": 120
+        },
+        {
+          "id": "echo_rtt.p50",
+          "unit": "ms",
+          "value": 0.211,
+          "samples": 40
+        },
+        {
+          "id": "echo_rtt.p95",
+          "unit": "ms",
+          "value": 0.309,
+          "samples": 40
+        },
+        {
+          "id": "echo_rtt.p99",
+          "unit": "ms",
+          "samples": 40,
+          "insufficient": true
+        },
+        {
+          "id": "dropped_session.mean",
+          "unit": "ms",
+          "value": 45000,
+          "samples": 31
+        }
+      ],
+      "inferences": [
+        {
+          "key": "tcp_capacity.inference.silent_drops",
+          "params": {
+            "count": 3
+          },
+          "basis": [
+            "drops.timeout"
+          ]
+        },
+        {
+          "key": "tcp_capacity.inference.peer_closed",
+          "params": {
+            "count": 1
+          },
+          "basis": [
+            "drops.closed"
+          ]
+        },
+        {
+          "key": "tcp_capacity.inference.reset_or_error",
+          "params": {
+            "count": 27
+          },
+          "basis": [
+            "drops.error"
+          ]
+        }
+      ],
+      "not_proven": [
+        {
+          "key": "tcp_capacity.not_proven.rejection_vs_drop",
+          "basis": [
+            "drops"
+          ]
+        },
+        {
+          "key": "tcp_capacity.not_proven.lifetime_upper_bound",
+          "params": {
+            "heartbeat_ms": 30000
+          },
+          "basis": [
+            "dropped_session.mean"
+          ]
+        }
+      ]
+    }
+  ]
+}

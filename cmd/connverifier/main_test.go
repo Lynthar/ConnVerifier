@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestBuildVersion(t *testing.T) {
+func TestVersionOf(t *testing.T) {
 	setting := func(kv ...string) []debug.BuildSetting {
 		var s []debug.BuildSetting
 		for i := 0; i < len(kv); i += 2 {
@@ -34,8 +34,8 @@ func TestBuildVersion(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := buildVersion(tt.info); got != tt.want {
-				t.Fatalf("buildVersion = %q, want %q", got, tt.want)
+			if got := versionOf(tt.info); got != tt.want {
+				t.Fatalf("versionOf = %q, want %q", got, tt.want)
 			}
 		})
 	}

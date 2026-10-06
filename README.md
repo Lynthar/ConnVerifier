@@ -56,18 +56,43 @@ For an unattended run that stops on its own:
 ./bin/connverifier capacity -addr <server>:9000 -clients 1000 -duration 1h
 ```
 
-Output looks like this, once a second, then a summary at the end:
+While it runs, a progress line goes to stderr once a second:
 
 ```
 stats target=50 active=50 dial_attempts=50 connects=50 dial_errors=0 drops=0
   heartbeats=100 ack=100 rtt_p50=159µs rtt_p95=255µs rtt_p99=255µs
 ```
 
+When it stops, the result goes to stdout — as text, or as JSON with
+`-format json`. Shortened:
+
+```
+TCP long-lived connections: attention (WARN)
+Node: 192.0.2.10:9000 · IPv4 · TCP
+Observed
+  Connections made: 73
+  Drops: 31
+  Drops (no reply in time): 3
+  Echo round trip p95: 309 µs (40 samples)
+  Echo round trip p99: too few samples (40)
+Inferred
+  - Connections that stopped answering without a close or reset: 3. This is
+    the usual sign of a NAT or other middlebox silently dropping connection state.
+Not proven
+  - A node turning connections away at its limit cannot be told apart from the
+    network dropping them; the client sees the same thing.
+```
+
+The text is in Chinese or English, following `LC_ALL`, `LC_MESSAGES` or `LANG`;
+any other language gets Chinese, and `-lang en` or `-lang zh-CN` overrides it.
+What each status and number means, and when not to trust it, is in
+[docs/methods](docs/methods/README.md).
+
 Everything is a flag; there's no config file and no environment variables.
 `capacity`: `-addr`, `-clients` (1000), `-start-rate` (100), `-heartbeat` (30s),
 `-dial-timeout` (5s), `-io-timeout` (5s), `-min-backoff` (500ms),
 `-max-backoff` (1m), `-tcp-keepalive` (0), `-duration` (0 = until interrupted),
-`-log-drops`. `serve`: `-addr` (:9000), `-max-conns` (10000), `-idle-timeout`
+`-log-drops`, `-format` (text), `-lang`. `serve`: `-addr` (:9000), `-max-conns` (10000), `-idle-timeout`
 (2m), `-tcp-keepalive` (0), `-log-connections`. Zero or negative means disabled
 or unlimited.
 
@@ -77,10 +102,12 @@ mapping and quietly turn every result into "the NAT is fine".
 ## Limitations
 
 - **TCP only.** No UDP, no STUN, no DNS, no bandwidth measurement.
-- **No JSON output and no stable output format.** Anything parsing the text
-  will break when the text changes.
-- **The exit code doesn't judge your network.** Zero means the run finished;
-  non-zero means the tool itself failed. Gating CI on it will always pass.
+- **The JSON schema is `v0`.** It can still change between builds; pin a build
+  if you parse it, and don't parse the text.
+- **The exit code doesn't judge your network.** `0` means the run completed,
+  whatever the statuses. `1` means a check obtained no valid measurement (status
+  `ERROR` — for example, the node was unreachable) or the tool failed. `2` means
+  invalid flags. To gate on network quality, read the JSON.
 - **Drops are found on the heartbeat, not instantly.** A `FIN` arriving between
   beats isn't noticed until the next one, so reported lifetimes are an upper
   bound and `active` runs slightly high.
