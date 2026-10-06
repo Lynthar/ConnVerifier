@@ -10,13 +10,14 @@ English | [简体中文](README.zh-CN.md)
 > there's no release yet — you build it from source.
 
 Carriers and home routers quietly forget idle TCP connections. This finds out
-when. `connverifier serve` echoes bytes back; `connverifier capacity` opens as
-many connections as you ask for, keeps them alive with a small heartbeat, and reports what percentage
-survived and for how long — with each disconnect attributed to a timeout, a
-close from the peer, or an error. Every second it prints p50, p95 and p99 RTT
-alongside the connection counts.
+when. You run a **node** on a server you control and hand out **invites** to it;
+`connverifier capacity` opens as many connections to the node as you ask for,
+keeps them alive with a small heartbeat, and reports how many survived and for
+how long — each disconnect attributed to a silent timeout, a close, a reset, or
+the node closing it with a stated reason. When the node is full it says so, and
+the result says the node, not your network, set the limit.
 
-Standard library only, no dependencies.
+One binary, one dependency (`golang.org/x/term`).
 
 ## Build
 
@@ -34,75 +35,71 @@ cd ConnVerifier
 go build -o bin/connverifier ./cmd/connverifier
 ```
 
-Raise the file descriptor limit on **both** machines before running anything
-sizeable — one connection is one descriptor. If the client's limit or its
-ephemeral port range is below the target, or dials fail for lack of either, the
-result is marked `INVALID`: it would show the client machine's limit, not the
-network's.
-
 ## Usage
+
+On the server, start a node and create an invite for each person who will test
+against it. The node listens on one TCP port (7443 by default) for everything:
 
 ```bash
 ulimit -n 20480
-./bin/connverifier serve -addr :9000 -max-conns 20000 -idle-timeout 2m
+./bin/connverifier serve -max-conns 20000
+./bin/connverifier invite create -label alice -addr <server-ip>:7443 > alice.invite
 ```
 
-On the other side. `capacity` first says how many connections it will open and
-asks for confirmation on the terminal, because filling the NAT table can cut off
-other devices on the same network; `-yes` skips the question and is required when
-stdin is not a terminal:
+The first `serve` or `invite` creates the node's key under the user's config
+directory (`-state-dir` to change it). `invite list` shows the invites and
+`invite revoke -label alice` withdraws one.
+
+On the machine whose network you want to test, give `capacity` the invite — from a
+file or the `CONNVERIFIER_NODE` variable keeps it out of your shell history. It
+first says how many connections it will open and asks for confirmation, because
+filling the NAT table can cut off other devices on the same network; `-yes` skips
+the question and is required when stdin is not a terminal:
 
 ```bash
-./bin/connverifier capacity -addr <server>:9000 -clients 10000 -start-rate 500 -heartbeat 30s
+ulimit -n 20480
+./bin/connverifier capacity -node @alice.invite -clients 10000 -start-rate 500 -heartbeat 30s
+./bin/connverifier capacity -node @alice.invite -clients 1000 -duration 1h -yes
 ```
 
-For an unattended run that stops on its own:
-
-```bash
-./bin/connverifier capacity -addr <server>:9000 -clients 1000 -duration 1h -yes
-```
-
-While it runs, a progress line goes to stderr once a second:
-
-```
-stats target=50 active=50 dial_attempts=50 connects=50 dial_errors=0 drops=0
-  heartbeats=100 ack=100 rtt_p50=159µs rtt_p95=255µs rtt_p99=255µs
-```
-
-When it stops, the result goes to stdout — as text, or as JSON with
-`-format json`. Shortened:
+While it runs, a progress line goes to stderr once a second. When it stops, the
+result goes to stdout — as text, or as JSON with `-format json`. Shortened:
 
 ```
 TCP long-lived connections: attention (WARN)
-Node: 192.0.2.10:9000 · IPv4 · TCP
+Node: 192.0.2.10:7443 · IPv4 · TCP
+Reported by the node
+  Name: tokyo-test
+  Granted: 50 connections · 100 new per second · 10.3 min · idle 2 min
 Observed
   Connections made: 73
   Drops: 31
   Drops (no reply in time): 3
+  Drops (closed by the node, with a reason): 25
   Echo round trip p95: 309 µs (40 samples)
   Echo round trip p99: too few samples (40)
 Inferred
-  - Connections that stopped answering without a close or reset: 3. This is
-    the usual sign of a NAT or other middlebox silently dropping connection state.
-Not proven
-  - A node turning connections away at its limit cannot be told apart from the
-    network dropping them; the client sees the same thing.
+  - Connections that stopped answering without a close or reset: 3. This is the
+    usual sign of a NAT or other middlebox silently dropping connection state.
+  - Connections the node closed and said why: 25 (idle_timeout=25). These are not
+    evidence of network drops.
 ```
 
 The text is in Chinese or English, following `LC_ALL`, `LC_MESSAGES` or `LANG`;
 any other language gets Chinese, and `-lang en` or `-lang zh-CN` overrides it.
 What each status and number means, and when not to trust it, is in
-[docs/methods](docs/methods/README.md).
+[docs/methods](docs/methods/README.md); the node protocol is in
+[docs/protocol.md](docs/protocol.md).
 
-Everything is a flag; there's no config file and no environment variables.
-`capacity`: `-addr`, `-clients` (1000), `-start-rate` (100), `-heartbeat` (30s),
-`-dial-timeout` (5s), `-io-timeout` (5s), `-min-backoff` (500ms),
-`-max-backoff` (1m), `-tcp-keepalive` (0), `-duration` (0 = until interrupted),
-`-log-drops`, `-format` (text), `-lang`, `-yes`. `serve`: `-addr` (:9000), `-max-conns` (10000), `-idle-timeout`
-(2m), `-tcp-keepalive` (0), `-log-connections`. Zero or negative means disabled
-or unlimited.
+Everything is a flag. `capacity`: `-node`, `-clients` (1000), `-start-rate` (100),
+`-heartbeat` (30s), `-dial-timeout` (5s), `-io-timeout` (5s), `-min-backoff`
+(500ms), `-max-backoff` (1m), `-duration` (0 = until interrupted), `-log-drops`,
+`-format` (text), `-lang`, `-yes`. `serve`: `-listen` (:7443), `-state-dir`,
+`-max-conns` (20000), `-max-sessions` (64), `-log-connections`. `invite create`:
+`-label`, `-addr` (repeatable), `-max-sessions` (2), `-max-connections` (20000),
+`-max-dial-rate` (1000), `-max-duration` (24h), `-max-idle` (1h).
 
-**`-tcp-keepalive` is 0 on purpose** — kernel keepalives would refresh the NAT
+Neither side enables TCP keepalive: keepalive probes would refresh the NAT
 mapping and quietly turn every result into "the NAT is fine".
 
 ## Limitations
@@ -115,30 +112,36 @@ mapping and quietly turn every result into "the NAT is fine".
   `ERROR` — for example, the node was unreachable) or the tool failed. `2` means
   nothing ran: invalid flags, or the confirmation was declined or missing. To
   gate on network quality, read the JSON.
-- **Drops are found on the heartbeat, not instantly.** A `FIN` arriving between
-  beats isn't noticed until the next one, so reported lifetimes are an upper
-  bound and `active` runs slightly high.
-- **A full server looks like a client-side failure.** The TCP handshake
-  completes before the rejection, so you see successful dials and failed first
-  heartbeats, with `dial_errors` at zero. Check the server's `rejected=` count
-  to tell them apart.
-- **About 28,000 ephemeral ports** per source IP against one destination
-  `ip:port` caps how many connections one client machine can hold.
+- **Silent drops are found on the heartbeat.** Closes and resets are seen the
+  moment they arrive, but a connection a NAT forgets silently is only noticed when
+  a heartbeat goes unanswered, so those lifetimes are upper bounds.
+- **Host limits bound the result.** One connection is one file descriptor, and one
+  source address has about 28,000 ephemeral ports (16,000 on macOS and Windows)
+  per destination. If the client's limit is below the target, or dials fail for
+  lack of either, the result is marked `INVALID` rather than reported as a network
+  limit.
 
 ## Differences from upstream
 
 This is a fork of [codeberg.org/woq/ConnVerifier](https://codeberg.org/woq/ConnVerifier).
-What I added: a single `connverifier` binary with tests, RTT percentiles, drop attribution,
-reconnect with exponential backoff and jitter, a server with a connection cap
-and idle reaping, and `-duration` for unattended soak runs.
+What I added: a single `connverifier` binary with tests, an authenticated node
+protocol with invites and per-invite limits, RTT percentiles, drop attribution,
+reconnect with exponential backoff and jitter, and `-duration` for unattended
+soak runs.
 
 ## Security
 
-**The server is an unauthenticated echo endpoint.** It has no rate limiting, so
-anyone who can reach it can fill `-max-conns` and keep legitimate clients out,
-and it will echo back whatever bytes it receives. Put it behind a firewall that
-only admits the client you're testing from, and don't leave it on the open
-internet.
+- **An invite works like a password.** Anyone holding it can use the node within
+  that invite's limits. Send it privately; revoke it with `invite revoke`.
+- **The node only accepts invite holders.** Connections that don't finish TLS or a
+  valid ticket within 10 seconds are dropped, and each address may hold only a few
+  of those at once. The node never connects anywhere on a client's behalf.
+- **Clients check the node's key.** An invite pins the node's public key; a node
+  presenting any other key is refused before the token is sent.
+- **The node sees your public address** — any server you connect to does. Results
+  record it locally; they never contain the invite.
+
+The full threat model is in [docs/threat-model.md](docs/threat-model.md).
 
 ## License
 

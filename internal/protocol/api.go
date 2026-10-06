@@ -11,11 +11,8 @@ import (
 	"time"
 )
 
-// Control-plane paths.
-const (
-	PathSessions = "/v2/sessions"
-	PathStatus   = "/v2/status"
-)
+// PathSessions is where sessions are created (POST) and ended (DELETE …/{id}).
+const PathSessions = "/v2/sessions"
 
 // MaxBody bounds every control-plane request and response body.
 const MaxBody = 4096
@@ -112,7 +109,7 @@ func (n NodeInfo) validate() error {
 }
 
 // SessionResponse grants a session. ObservedAddr is the client's address as the node
-// saw it on the control connection; it is sensitive and belongs only in local results.
+// saw it on the control connection, empty if unknown; sensitive, for local results only.
 type SessionResponse struct {
 	SessionID    string    `json:"session_id"`
 	Secret       string    `json:"secret"`
@@ -129,8 +126,10 @@ func (r *SessionResponse) Validate() error {
 	if _, err := r.SecretBytes(); err != nil {
 		return fmt.Errorf("secret: %w", err)
 	}
-	if _, err := netip.ParseAddrPort(r.ObservedAddr); err != nil {
-		return fmt.Errorf("observed_addr: %w", err)
+	if r.ObservedAddr != "" {
+		if _, err := netip.ParseAddrPort(r.ObservedAddr); err != nil {
+			return fmt.Errorf("observed_addr: %w", err)
+		}
 	}
 	if err := r.Granted.validate(true); err != nil {
 		return fmt.Errorf("granted: %w", err)
@@ -157,17 +156,12 @@ func DecodeID(s string) ([16]byte, error) {
 	return id, decodeFixed(s, id[:])
 }
 
-type StatusResponse struct {
-	Node   NodeInfo `json:"node"`
-	Limits Limits   `json:"limits"`
+// SessionEnd answers DELETE on a session with the node's load at that moment.
+type SessionEnd struct {
+	Node NodeInfo `json:"node"`
 }
 
-func (r *StatusResponse) Validate() error {
-	if err := r.Limits.validate(true); err != nil {
-		return fmt.Errorf("limits: %w", err)
-	}
-	return r.Node.validate()
-}
+func (r *SessionEnd) Validate() error { return r.Node.validate() }
 
 // ErrorResponse explains a refused request. Message is for the reader only and
 // never decides a status.

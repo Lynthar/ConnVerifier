@@ -10,9 +10,12 @@
   "label.node": "Node",
   "label.method_version": "Method version",
   "label.elapsed": "Elapsed",
+
   "line.header": "{title}: {status} ({code})",
   "line.field": "{label}: {value}",
+
   "value.with_samples": "{value} ({samples} samples)",
+
   "label.insufficient": "too few samples ({samples})",
 
   "section.params": "Parameters",
@@ -21,13 +24,20 @@
   "section.not_proven": "Not proven",
   "section.warnings": "Validity warnings",
   "section.error": "Error",
+
   "confirm.prompt": "Continue? [y/N] ",
   "confirm.declined": "Cancelled; no connection was made.",
   "confirm.needs_yes": "stdin is not a terminal, so there is no way to confirm; add -yes to run anyway.",
 
+  "invite.need_addr": "Give the address clients use to reach this node with -addr HOST:PORT (repeat for more). Addresses on this host that look public: {addrs}",
+  "invite.created_note": "Send the line above to whoever will run checks against this node. It works like a password: don't post it anywhere public. To revoke: connverifier invite revoke -label {label}",
+  "invite.list_empty": "No invites yet.",
+  "invite.list_row": "{label}  created {created}  sessions ≤{sessions}  connections ≤{connections}  new ≤{rate}/s  duration ≤{duration}  idle ≤{idle}",
+
   "check.tcp-capacity.title": "TCP long-lived connections",
-  "tcp_capacity.confirm.notice": "About to open and hold {connections} TCP connections to {node}, at most {rate} new ones per second, for {duration_ms}. This fills connection tables in your router and your provider's NAT; other devices on the same network may briefly lose connectivity.",
-  "tcp_capacity.confirm.notice_until_stopped": "About to open and hold {connections} TCP connections to {node}, at most {rate} new ones per second, until you stop it. This fills connection tables in your router and your provider's NAT; other devices on the same network may briefly lose connectivity.",
+
+  "tcp_capacity.confirm.notice": "About to open and hold {connections} TCP connections to node \"{node}\" ({addr}), at most {rate} new ones per second, for {duration_ms}. This fills connection tables in your router and your provider's NAT; other devices on the same network may briefly lose connectivity.",
+  "tcp_capacity.confirm.notice_until_stopped": "About to open and hold {connections} TCP connections to node \"{node}\" ({addr}), at most {rate} new ones per second, until you stop it or the node's session ends. This fills connection tables in your router and your provider's NAT; other devices on the same network may briefly lose connectivity.",
 
   "param.target_connections": "Target connections",
   "param.start_rate": "New connections per second, max",
@@ -36,10 +46,8 @@
   "param.io_timeout_ms": "Heartbeat reply timeout",
   "param.min_backoff_ms": "Minimum reconnect wait",
   "param.max_backoff_ms": "Maximum reconnect wait",
-  "param.tcp_keepalive_ms": "TCP keepalive",
-  "param.tcp_keepalive_ms.zero": "off",
   "param.duration_ms": "Test duration",
-  "param.duration_ms.zero": "until interrupted",
+  "param.duration_ms.zero": "until interrupted or the node's session ends",
 
   "metric.connects": "Connections made",
   "metric.dial_errors": "Failed dials",
@@ -66,10 +74,42 @@
   "tcp_capacity.warning.fd_limit": "This host's open-file limit is {limit}, too low for {target} connections; the result is bounded by the host, not the network. Raise ulimit -n, including the hard limit, or lower -clients.",
   "tcp_capacity.warning.port_range": "This host has {ports} ephemeral ports, which caps connections to one node address below the target of {target}; the result is bounded by the host, not the network.",
   "tcp_capacity.inference.silent_drops": "Connections that stopped answering without a close or reset: {count}. This is the usual sign of a NAT or other middlebox silently dropping connection state.",
-  "tcp_capacity.inference.peer_closed": "Connections closed by the far side: {count}. Either the node ended them (idle timeout or connection limit) or a middlebox sent the close.",
+  "tcp_capacity.inference.peer_closed": "Connections closed by the far side without a reason: {count}. The node always states a reason before it closes a connection, so this points to a middlebox sending the close, or the node process exiting abnormally.",
   "tcp_capacity.inference.reset_or_error": "Connections ended by a reset or another error: {count}.",
   "tcp_capacity.inference.bad_ack": "Connections whose heartbeat reply differed from what was sent: {count}. Something on the path rewrote data, or the far side is not an echo node.",
-  "tcp_capacity.not_proven.rejection_vs_drop": "A node turning connections away at its limit cannot be told apart from the network dropping them; the client sees the same thing.",
-  "tcp_capacity.not_proven.lifetime_upper_bound": "Drops are only noticed at the next heartbeat, so lifetimes are upper bounds, long by up to one heartbeat interval ({heartbeat_ms}).",
-  "tcp_capacity.not_proven.no_full_interval": "No connection was seen idle for a full heartbeat interval ({heartbeat_ms}), so whether connections survive idleness was not tested."
+  "tcp_capacity.not_proven.lifetime_upper_bound": "A silently dropped connection is only noticed when a heartbeat reply times out, so its lifetime is an upper bound, long by up to one heartbeat interval ({heartbeat_ms}); closed or reset connections are noticed at once.",
+  "tcp_capacity.not_proven.no_full_interval": "No connection was seen idle for a full heartbeat interval ({heartbeat_ms}), so whether connections survive idleness was not tested.",
+
+  "metric.handshake_errors": "Connected but did not finish the ticket handshake",
+  "metric.rejected.busy": "Rejected by the node (full)",
+  "metric.rejected.quota": "Rejected by the node (over quota)",
+  "metric.rejected.auth": "Rejected by the node (invalid ticket)",
+  "metric.rejected.other": "Rejected by the node (other reason)",
+  "metric.drops.node_closed": "Drops (closed by the node, with a reason)",
+
+  "section.node": "Reported by the node",
+
+  "node.label": "Name",
+  "node.version": "Version",
+  "node.observed_addr": "This host's address as the node saw it",
+  "node.granted": "Granted",
+  "node.load_start": "Load at start",
+  "node.load_end": "Load at end",
+  "node.grant_value": "{connections} connections · {rate} new per second · {duration_ms} · idle {idle_ms}",
+  "node.load_value": "{sessions} sessions · {connections}/{max} connections",
+
+  "tcp_capacity.error.node_identity": "The node at {addr} presented a key that does not match the invite, so the run stopped before sending the token. The invite may be stale (the node changed its key), the address wrong, or the connection intercepted.",
+  "tcp_capacity.error.node_unreachable": "Could not reach the node's control port: {error}",
+  "tcp_capacity.error.session_refused": "The node refused a session ({reason}): {message}",
+  "tcp_capacity.error.node_busy": "The node is full and opened no session ({reason}): {message}. Try again in {retry_after_ms}.",
+  "tcp_capacity.error.rejected_auth": "The node rejected the ticket on all {count} connections: the session may have been ended or the invite revoked.",
+  "tcp_capacity.error.handshake_failed": "The node was reachable, but none of {count} connections finished the ticket handshake; something on the path may interfere. Last error: {last_error}",
+  "tcp_capacity.warning.idle_too_short": "The node granted an idle period of {idle_ms}, shorter than the {needed_ms} a heartbeat and its reply need: it would close every connection itself, so the run did not start. Lower -heartbeat or ask the node for a longer idle period.",
+  "tcp_capacity.warning.node_busy": "Connections the node turned away because it was full: {count}. The result shows the node's limit, not the network's.",
+  "tcp_capacity.warning.node_quota": "Connections the node turned away for quota: {count}. The result shows the invite's quota, not the network's.",
+  "tcp_capacity.warning.granted_less": "The node granted {granted} connections, fewer than the {asked} asked for: the asked-for scale was not tested.",
+  "tcp_capacity.warning.dial_rate_cut": "The node lowered new connections per second from {asked} to {granted}: the ramp-up is slower; drop judgements are unaffected.",
+  "tcp_capacity.warning.duration_cut": "The run ended because the node's session was about to expire ({granted_ms}), not at -duration.",
+  "tcp_capacity.inference.node_closed": "Connections the node closed and said why: {count} ({reasons}). These are not evidence of network drops.",
+  "tcp_capacity.not_proven.handshake_errors": "Connections that connected but did not finish the ticket handshake: {count}. The path or the node misbehaved before admission; the client cannot tell which."
 }

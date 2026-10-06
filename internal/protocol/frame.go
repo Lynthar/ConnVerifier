@@ -4,6 +4,7 @@
 package protocol
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
@@ -215,4 +216,40 @@ func ReadFrame(r io.Reader) (Frame, error) {
 		f.Seq = binary.BigEndian.Uint64(p[:8])
 	}
 	return f, nil
+}
+
+// FrameReader reads frames across read deadlines: when a read times out partway
+// through a frame, the bytes already read are kept for the next call, so a
+// deadline used as a timer cannot desynchronize the stream.
+type FrameReader struct {
+	buf [MaxFrameSize]byte
+	n   int
+}
+
+// Next returns the next frame from r, or the error that interrupted it. After a
+// timeout Next may be called again; after any other error the stream is unusable.
+func (fr *FrameReader) Next(r io.Reader) (Frame, error) {
+	need := frameHeaderLen
+	for {
+		if fr.n >= frameHeaderLen {
+			want, ok := payloadLen[FrameType(fr.buf[0])]
+			if !ok || int(binary.BigEndian.Uint16(fr.buf[1:3])) != want {
+				return Frame{}, ErrMalformed
+			}
+			need = frameHeaderLen + want
+		}
+		if fr.n == need {
+			f, err := ReadFrame(bytes.NewReader(fr.buf[:need]))
+			fr.n = 0
+			return f, err
+		}
+		m, err := r.Read(fr.buf[fr.n:need])
+		fr.n += m
+		if err != nil && fr.n < need {
+			if err == io.EOF && fr.n > 0 {
+				err = io.ErrUnexpectedEOF
+			}
+			return Frame{}, err
+		}
+	}
 }

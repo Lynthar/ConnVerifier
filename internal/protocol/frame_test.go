@@ -155,3 +155,74 @@ func FuzzReadHello(f *testing.F) {
 		}
 	})
 }
+
+// stutterReader hands out one byte per call and fails every other call with a
+// timeout, like a connection read with a short deadline.
+type stutterReader struct {
+	data []byte
+	tick bool
+}
+
+type timeoutErr struct{}
+
+func (timeoutErr) Error() string { return "i/o timeout" }
+func (timeoutErr) Timeout() bool { return true }
+
+func (s *stutterReader) Read(p []byte) (int, error) {
+	if s.tick = !s.tick; s.tick {
+		return 0, timeoutErr{}
+	}
+	if len(s.data) == 0 {
+		return 0, io.EOF
+	}
+	p[0], s.data = s.data[0], s.data[1:]
+	return 1, nil
+}
+
+func TestFrameReaderResumesAfterTimeouts(t *testing.T) {
+	want := []Frame{{Type: TypePong, Seq: 1}, {Type: TypeClose, Reason: ReasonIdleTimeout}, {Type: TypeAccept, IdleTimeoutMs: 9}}
+	var wire []byte
+	for _, f := range want {
+		wire = f.Append(wire)
+	}
+	r := &stutterReader{data: wire}
+	var fr FrameReader
+	var got []Frame
+	for len(got) < len(want) {
+		f, err := fr.Next(r)
+		var te timeoutErr
+		if errors.As(err, &te) {
+			continue
+		}
+		if err != nil {
+			t.Fatalf("Next: %v after %d frames", err, len(got))
+		}
+		got = append(got, f)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("frame %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	for {
+		_, err := fr.Next(r)
+		if errors.As(err, new(timeoutErr)) {
+			continue
+		}
+		if err != io.EOF {
+			t.Fatalf("after the last frame = %v, want io.EOF", err)
+		}
+		return
+	}
+}
+
+func TestFrameReaderRejectsMalformed(t *testing.T) {
+	var fr FrameReader
+	if _, err := fr.Next(bytes.NewReader([]byte{0x7f, 0, 1, 0})); !errors.Is(err, ErrMalformed) {
+		t.Fatalf("unknown type = %v, want ErrMalformed", err)
+	}
+	fr = FrameReader{}
+	if _, err := fr.Next(bytes.NewReader([]byte{byte(TypePing), 0, 8, 1})); err != io.ErrUnexpectedEOF {
+		t.Fatalf("truncated = %v, want io.ErrUnexpectedEOF", err)
+	}
+}

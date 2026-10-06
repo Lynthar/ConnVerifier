@@ -14,10 +14,10 @@
   "checks": [
     {
       "id": "tcp-capacity",
-      "method_version": 2,
+      "method_version": 3,
       "status": "WARN",
       "path": {
-        "node": "192.0.2.10:9000",
+        "node": "192.0.2.10:7443",
         "family": "ipv4",
         "protocol": "tcp"
       },
@@ -28,9 +28,8 @@
         "io_timeout_ms": 1000,
         "max_backoff_ms": 1000,
         "min_backoff_ms": 100,
-        "start_rate": 1,
-        "target_connections": 50,
-        "tcp_keepalive_ms": 0
+        "start_rate": 100,
+        "target_connections": 50
       },
       "elapsed_ms": 600012,
       "metrics": [
@@ -42,10 +41,35 @@
         {
           "id": "dial_errors",
           "unit": "count",
-          "value": 2
+          "value": 0
         },
         {
           "id": "dial_errors.host_resource",
+          "unit": "count",
+          "value": 0
+        },
+        {
+          "id": "handshake_errors",
+          "unit": "count",
+          "value": 0
+        },
+        {
+          "id": "rejected.busy",
+          "unit": "count",
+          "value": 0
+        },
+        {
+          "id": "rejected.quota",
+          "unit": "count",
+          "value": 0
+        },
+        {
+          "id": "rejected.auth",
+          "unit": "count",
+          "value": 0
+        },
+        {
+          "id": "rejected.other",
           "unit": "count",
           "value": 0
         },
@@ -67,12 +91,17 @@
         {
           "id": "drops.error",
           "unit": "count",
-          "value": 27
+          "value": 2
         },
         {
           "id": "drops.bad_ack",
           "unit": "count",
           "value": 0
+        },
+        {
+          "id": "drops.node_closed",
+          "unit": "count",
+          "value": 25
         },
         {
           "id": "heartbeats.sent",
@@ -146,20 +175,24 @@
         {
           "key": "tcp_capacity.inference.reset_or_error",
           "params": {
-            "count": 27
+            "count": 2
           },
           "basis": [
             "drops.error"
           ]
+        },
+        {
+          "key": "tcp_capacity.inference.node_closed",
+          "params": {
+            "count": 25,
+            "reasons": "idle_timeout=25"
+          },
+          "basis": [
+            "drops.node_closed"
+          ]
         }
       ],
       "not_proven": [
-        {
-          "key": "tcp_capacity.not_proven.rejection_vs_drop",
-          "basis": [
-            "drops"
-          ]
-        },
         {
           "key": "tcp_capacity.not_proven.lifetime_upper_bound",
           "params": {
@@ -169,7 +202,30 @@
             "dropped_session.mean"
           ]
         }
-      ]
+      ],
+      "node": {
+        "label": "tokyo-test",
+        "version": "v0.0.0-test",
+        "observed_addr": "198.51.100.7:51234",
+        "granted": {
+          "connections": 50,
+          "dial_rate": 100,
+          "duration_s": 620,
+          "idle_timeout_s": 120
+        },
+        "load_start": {
+          "sessions": 1,
+          "connections": 0,
+          "max_connections": 20000,
+          "uptime_s": 86400
+        },
+        "load_end": {
+          "sessions": 0,
+          "connections": 0,
+          "max_connections": 20000,
+          "uptime_s": 87000
+        }
+      }
     }
   ]
 }

@@ -10,9 +10,12 @@
   "label.node": "节点",
   "label.method_version": "方法版本",
   "label.elapsed": "用时",
+
   "line.header": "{title}：{status}（{code}）",
   "line.field": "{label}：{value}",
+
   "value.with_samples": "{value}（{samples} 个样本）",
+
   "label.insufficient": "样本不足（{samples} 个样本）",
 
   "section.params": "参数",
@@ -21,13 +24,20 @@
   "section.not_proven": "未能证明",
   "section.warnings": "有效性警告",
   "section.error": "错误",
+
   "confirm.prompt": "继续吗？[y/N] ",
   "confirm.declined": "已取消，没有建立任何连接。",
   "confirm.needs_yes": "标准输入不是终端，没法确认；确定要跑就加上 -yes。",
 
+  "invite.need_addr": "请用 -addr 主机:端口 指定客户端连到本节点用的地址（可重复给多个）。本机看起来是公网的地址：{addrs}",
+  "invite.created_note": "把上面这一串发给要用本节点做检测的人。它等同于密码：别贴到公开的地方。吊销：connverifier invite revoke -label {label}",
+  "invite.list_empty": "还没有邀请串。",
+  "invite.list_row": "{label}　创建于 {created}　会话 ≤{sessions}　连接 ≤{connections}　新建 ≤{rate}/s　时长 ≤{duration}　空闲 ≤{idle}",
+
   "check.tcp-capacity.title": "TCP 长连接容量",
-  "tcp_capacity.confirm.notice": "即将向 {node} 建立并保持 {connections} 条 TCP 连接，每秒最多新建 {rate} 条，持续 {duration_ms}。这会占用路由器和运营商 NAT 的连接表，同一网络里的其他设备可能短时断网。",
-  "tcp_capacity.confirm.notice_until_stopped": "即将向 {node} 建立并保持 {connections} 条 TCP 连接，每秒最多新建 {rate} 条，一直持续到你中断为止。这会占用路由器和运营商 NAT 的连接表，同一网络里的其他设备可能短时断网。",
+
+  "tcp_capacity.confirm.notice": "即将向节点「{node}」（{addr}）建立并保持 {connections} 条 TCP 连接，每秒最多新建 {rate} 条，持续 {duration_ms}。这会占用路由器和运营商 NAT 的连接表，同一网络里的其他设备可能短时断网。",
+  "tcp_capacity.confirm.notice_until_stopped": "即将向节点「{node}」（{addr}）建立并保持 {connections} 条 TCP 连接，每秒最多新建 {rate} 条，一直持续到你中断或节点会话结束。这会占用路由器和运营商 NAT 的连接表，同一网络里的其他设备可能短时断网。",
 
   "param.target_connections": "目标连接数",
   "param.start_rate": "每秒新建连接上限",
@@ -36,10 +46,8 @@
   "param.io_timeout_ms": "心跳回包超时",
   "param.min_backoff_ms": "最短重连等待",
   "param.max_backoff_ms": "最长重连等待",
-  "param.tcp_keepalive_ms": "TCP keepalive",
-  "param.tcp_keepalive_ms.zero": "关闭",
   "param.duration_ms": "测试时长",
-  "param.duration_ms.zero": "直到中断",
+  "param.duration_ms.zero": "直到中断或节点会话结束",
 
   "metric.connects": "成功建连",
   "metric.dial_errors": "建连失败",
@@ -66,10 +74,42 @@
   "tcp_capacity.warning.fd_limit": "本机文件描述符上限是 {limit}，达不到 {target} 条连接所需：结果受本机限制，不反映网络。请调高 ulimit -n（含硬上限）或减少 -clients。",
   "tcp_capacity.warning.port_range": "本机只有 {ports} 个临时端口，到同一个节点地址最多只能建这么多连接，低于目标 {target} 条：结果受本机限制，不反映网络。",
   "tcp_capacity.inference.silent_drops": "{count} 条连接没有收到关闭或重置就不再回应，这是 NAT 或其他中间设备悄悄丢弃连接状态的典型表现。",
-  "tcp_capacity.inference.peer_closed": "{count} 条连接被对端关闭：可能是节点主动断开（空闲超时或连接数已满），也可能是中间设备代发了关闭。",
+  "tcp_capacity.inference.peer_closed": "{count} 条连接被对端关闭，但没有说明原因。节点按协议关闭时总会先说明原因，所以这更像是中间设备代发了关闭，或者节点进程异常退出。",
   "tcp_capacity.inference.reset_or_error": "{count} 条连接因重置或其他错误中断。",
   "tcp_capacity.inference.bad_ack": "{count} 条连接收到的心跳回包与发出的不一致：路径上有设备改写了数据，或对端不是回显节点。",
-  "tcp_capacity.not_proven.rejection_vs_drop": "无法区分节点满载后的拒绝与网络造成的中断，两者在客户端看来是一样的。",
-  "tcp_capacity.not_proven.lifetime_upper_bound": "掉线要到下一次心跳才被发现，所以存活时长是上界，最多偏长一个心跳间隔（{heartbeat_ms}）。",
-  "tcp_capacity.not_proven.no_full_interval": "没有任何连接被观察到空闲满一个心跳间隔（{heartbeat_ms}），无法判断连接能否在空闲中存活。"
+  "tcp_capacity.not_proven.lifetime_upper_bound": "悄悄失效的连接要到心跳回包超时才被发现，所以这类掉线的存活时长是上界，最多偏长一个心跳间隔（{heartbeat_ms}）；被关闭或重置的连接是即时发现的。",
+  "tcp_capacity.not_proven.no_full_interval": "没有任何连接被观察到空闲满一个心跳间隔（{heartbeat_ms}），无法判断连接能否在空闲中存活。",
+
+  "metric.handshake_errors": "连上但未完成票据握手",
+  "metric.rejected.busy": "节点拒绝（已满）",
+  "metric.rejected.quota": "节点拒绝（超出配额）",
+  "metric.rejected.auth": "节点拒绝（票据无效）",
+  "metric.rejected.other": "节点拒绝（其他原因）",
+  "metric.drops.node_closed": "掉线（节点说明原因后关闭）",
+
+  "section.node": "节点自报",
+
+  "node.label": "名称",
+  "node.version": "版本",
+  "node.observed_addr": "节点看到的本机地址",
+  "node.granted": "批给的额度",
+  "node.load_start": "开始时负载",
+  "node.load_end": "结束时负载",
+  "node.grant_value": "{connections} 条连接 · 每秒新建 {rate} 条 · 时长 {duration_ms} · 空闲 {idle_ms}",
+  "node.load_value": "{sessions} 个会话 · {connections}/{max} 条连接",
+
+  "tcp_capacity.error.node_identity": "{addr} 上的节点出示的密钥与邀请串不符，已中止，没有发送令牌。可能是邀请串过期（节点换过密钥）、地址填错，或者连接被人截持。",
+  "tcp_capacity.error.node_unreachable": "连不上节点的控制端口：{error}",
+  "tcp_capacity.error.session_refused": "节点拒绝建立会话（{reason}）：{message}",
+  "tcp_capacity.error.node_busy": "节点暂时满了，没有建立会话（{reason}）：{message}。可在 {retry_after_ms} 后重试。",
+  "tcp_capacity.error.rejected_auth": "节点拒收了全部 {count} 条连接的票据：会话可能已被结束或邀请串已被吊销。",
+  "tcp_capacity.error.handshake_failed": "连得上节点，但 {count} 条连接都没完成票据握手；路径上可能有设备干扰。最近一次的错误：{last_error}",
+  "tcp_capacity.warning.idle_too_short": "节点批的空闲期限只有 {idle_ms}，短于一次心跳加回包所需的 {needed_ms}：节点会自己关掉每条连接，所以没有开跑。请调小 -heartbeat 或请节点放宽空闲期限。",
+  "tcp_capacity.warning.node_busy": "节点因满载拒绝了 {count} 条连接：测到的是节点的上限，不是网络的。",
+  "tcp_capacity.warning.node_quota": "节点因配额拒绝了 {count} 条连接：测到的是邀请串的配额，不是网络的。",
+  "tcp_capacity.warning.granted_less": "节点只批了 {granted} 条连接，少于要求的 {asked} 条：没测到要求的规模。",
+  "tcp_capacity.warning.dial_rate_cut": "节点把每秒新建连接数从 {asked} 压到了 {granted}：建连爬坡变慢，不影响掉线判断。",
+  "tcp_capacity.warning.duration_cut": "运行在节点会话到期（{granted_ms}）前结束，不是按 -duration 结束的。",
+  "tcp_capacity.inference.node_closed": "{count} 条连接由节点说明原因后关闭（{reasons}），不算网络掉线的证据。",
+  "tcp_capacity.not_proven.handshake_errors": "有 {count} 条连接连上了却没完成票据握手，路径或节点在接纳前出了问题；原因无法从客户端判定。"
 }

@@ -9,11 +9,12 @@
 > **施工中。** 下面写的它都能做，测试也是过的，但**还没有 release**，只能从源码构建。
 
 运营商和家用路由器会悄悄忘掉空闲的 TCP 连接。这东西就是用来测「多久之后忘」的。
-`connverifier serve` 把收到的字节原样回显；`connverifier capacity` 按你要求的数量把连接建起来，用很小的心跳维持着，
-然后告诉你有多少条活下来、活了多久——每一次掉线都归因到超时、对端关闭，还是出错。
-每秒输出 p50、p95、p99 RTT，连同各项连接计数。
+你在自己控制的服务器上跑一个**节点**，再给要测的人发**邀请串**；`connverifier capacity`
+按你要求的数量向节点建连，用很小的心跳维持着，然后告诉你有多少条活下来、活了多久——
+每一次掉线都归因到悄悄超时、被关闭、被重置，还是节点说明原因后关闭。节点满了会直说，
+结果也会写明上限是节点定的，不是你的网络。
 
-纯标准库，零第三方依赖。
+单个程序，一个依赖（`golang.org/x/term`）。
 
 ## 构建
 
@@ -31,67 +32,63 @@ cd ConnVerifier
 go build -o bin/connverifier ./cmd/connverifier
 ```
 
-跑大规模之前，**两端**都要先把文件描述符上限抬上去——一条连接就是一个描述符。客户端的
-上限或临时端口范围低于目标连接数，或者拨号因这两样用尽而失败，结果会标成 `INVALID`：那测到的
-是客户机自己的上限，不是网络的。
-
 ## 用法
+
+在服务器上起节点，给每个要来测的人各建一张邀请串。节点只开一个 TCP 端口（默认 7443），
+所有流量都走它：
 
 ```bash
 ulimit -n 20480
-./bin/connverifier serve -addr :9000 -max-conns 20000 -idle-timeout 2m
+./bin/connverifier serve -max-conns 20000
+./bin/connverifier invite create -label alice -addr <服务器IP>:7443 > alice.invite
 ```
 
-另一头。`capacity` 开跑前会先说明要建多少连接，并在终端里请你确认——占满 NAT 表可能让
-同一网络里的其他设备断网；`-yes` 跳过确认，标准输入不是终端时必须加：
+第一次 `serve` 或 `invite` 会在用户配置目录下生成节点密钥（`-state-dir` 可改位置）。
+`invite list` 列出邀请串，`invite revoke -label alice` 吊销一张。
+
+在要测网络的那台机器上，把邀请串交给 `capacity`——从文件读，或放进 `CONNVERIFIER_NODE`
+环境变量，就不会留在 shell 历史里。开跑前它会先说明要建多少连接并请你确认——占满 NAT 表
+可能让同一网络里的其他设备断网；`-yes` 跳过确认，标准输入不是终端时必须加：
 
 ```bash
-./bin/connverifier capacity -addr <服务端>:9000 -clients 10000 -start-rate 500 -heartbeat 30s
+ulimit -n 20480
+./bin/connverifier capacity -node @alice.invite -clients 10000 -start-rate 500 -heartbeat 30s
+./bin/connverifier capacity -node @alice.invite -clients 1000 -duration 1h -yes
 ```
 
-想跑完自己停的无人值守：
-
-```bash
-./bin/connverifier capacity -addr <服务端>:9000 -clients 1000 -duration 1h -yes
-```
-
-运行中每秒往 stderr 打一行进度：
-
-```
-stats target=50 active=50 dial_attempts=50 connects=50 dial_errors=0 drops=0
-  heartbeats=100 ack=100 rtt_p50=159µs rtt_p95=255µs rtt_p99=255µs
-```
-
-结束时结果写到 stdout，默认是文本，`-format json` 则输出 JSON。节选：
+运行中每秒往 stderr 打一行进度。结束时结果写到 stdout，默认是文本，`-format json` 则输出
+JSON。节选：
 
 ```
 TCP 长连接容量：注意（WARN）
-节点：192.0.2.10:9000 · IPv4 · TCP
+节点：192.0.2.10:7443 · IPv4 · TCP
+节点自报
+  名称：tokyo-test
+  批给的额度：50 条连接 · 每秒新建 100 条 · 时长 10.3 min · 空闲 2 min
 观测
   成功建连：73
   掉线：31
   掉线（超时无回应）：3
+  掉线（节点说明原因后关闭）：25
   回显往返时延 p95：309 µs（40 个样本）
   回显往返时延 p99：样本不足（40 个样本）
 推断
   - 3 条连接没有收到关闭或重置就不再回应，这是 NAT 或其他中间设备悄悄丢弃连接状态的典型表现。
-未能证明
-  - 无法区分节点满载后的拒绝与网络造成的中断，两者在客户端看来是一样的。
+  - 25 条连接由节点说明原因后关闭（idle_timeout=25），不算网络掉线的证据。
 ```
 
 文本语言跟随 `LC_ALL`、`LC_MESSAGES` 或 `LANG`，支持中文和英文，其余一律用中文；
 `-lang en` 或 `-lang zh-CN` 可以覆盖。每个状态和数字是什么意思、什么时候不该信，见
-[docs/methods](docs/methods/README.md)（英文）。
+[docs/methods](docs/methods/README.md)（英文）；节点协议见 [docs/protocol.md](docs/protocol.md)。
 
-全部走旗标，没有配置文件，没有环境变量。`capacity`：`-addr`、`-clients`（1000）、
-`-start-rate`（100）、`-heartbeat`（30s）、`-dial-timeout`（5s）、`-io-timeout`（5s）、
-`-min-backoff`（500ms）、`-max-backoff`（1m）、`-tcp-keepalive`（0）、
-`-duration`（0＝直到中断）、`-log-drops`、`-format`（text）、`-lang`、`-yes`。`serve`：`-addr`（:9000）、`-max-conns`（10000）、
-`-idle-timeout`（2m）、`-tcp-keepalive`（0）、`-log-connections`。零或负数一律表示
-「禁用 / 无限」。
+全部走旗标。`capacity`：`-node`、`-clients`（1000）、`-start-rate`（100）、`-heartbeat`（30s）、
+`-dial-timeout`（5s）、`-io-timeout`（5s）、`-min-backoff`（500ms）、`-max-backoff`（1m）、
+`-duration`（0＝直到中断）、`-log-drops`、`-format`（text）、`-lang`、`-yes`。`serve`：
+`-listen`（:7443）、`-state-dir`、`-max-conns`（20000）、`-max-sessions`（64）、
+`-log-connections`。`invite create`：`-label`、`-addr`（可重复）、`-max-sessions`（2）、
+`-max-connections`（20000）、`-max-dial-rate`（1000）、`-max-duration`（24h）、`-max-idle`（1h）。
 
-**`-tcp-keepalive` 默认 0 是有意的**——内核 keepalive 会不断刷新 NAT 映射，那样测出来的
-结果永远是「NAT 很稳」。
+两端都不开 TCP keepalive：keepalive 会不断刷新 NAT 映射，那样测出来的结果永远是「NAT 很稳」。
 
 ## 能力边界
 
@@ -100,24 +97,30 @@ TCP 长连接容量：注意（WARN）
 - **退出码不评判网络质量。** 0 表示跑完了，不管各项状态如何；1 表示有检查没拿到有效
   测量（状态 `ERROR`，比如节点连不上），或工具自己出错；2 表示什么都没跑：参数不对，或
   没有确认。要按网络质量设门禁，读 JSON。
-- **掉线是靠心跳发现的，不是即时的。** 两次心跳之间到达的 `FIN` 要等下一拍才被看见，
-  所以报出来的存活时长是上界，`active` 会短暂偏高。
-- **服务端满载拒绝会伪装成客户端故障。** TCP 握手在拒绝之前就完成了，表现为
-  dial 成功、首个心跳失败、而 `dial_errors` 是 0。要对照服务端的 `rejected=` 才分得清。
-- **单个源 IP 对单一目标 `ip:port` 只有约 28000 个临时端口**，这限制了一台客户机能
-  维持多少连接。
+- **悄悄的掉线要靠心跳发现。** 关闭和重置一到就能看见，但被 NAT 悄悄遗忘的连接要等心跳
+  没有回应才发现，这类掉线的存活时长是上界。
+- **本机上限会框住结果。** 一条连接占一个文件描述符；单个源地址对同一个目标只有约 28000 个
+  临时端口（macOS 与 Windows 约 16000）。客户端上限低于目标，或拨号因此失败，结果会标成
+  `INVALID`，而不是当成网络的上限报出来。
 
 ## 与上游的区别
 
 本仓库 fork 自 [codeberg.org/woq/ConnVerifier](https://codeberg.org/woq/ConnVerifier)。
-我在它基础上加的是：单个 `connverifier` 程序与测试、RTT 百分位、掉线归因、带抖动的指数退避重连、
-有并发上限和空闲回收的服务端，以及给无人值守长跑用的 `-duration`。
+我在它基础上加的是：单个 `connverifier` 程序与测试、带邀请串和逐张配额的鉴权节点协议、
+RTT 百分位、掉线归因、带抖动的指数退避重连，以及给无人值守长跑用的 `-duration`。
 
 ## 安全
 
-**服务端是一个不做鉴权的回显端点。** 它没有限速，所以任何能连上的人都可以把
-`-max-conns` 占满、把真正的客户端挡在外面；而且它会把收到的任意字节原样回显出去。
-请用防火墙只放行你测试用的那个客户端，**别把它挂在公网上**。
+- **邀请串等同于密码。** 谁拿到它，谁就能在那张邀请串的额度内使用节点。私下发送；
+  用 `invite revoke` 吊销。
+- **节点只接待持邀请串的人。** 10 秒内完不成 TLS 或有效票据的连接会被断开，每个地址同时
+  只能挂几条这样的连接。节点从不替客户端去连别处。
+- **客户端会核对节点的密钥。** 邀请串钉住了节点公钥；节点出示别的密钥，客户端在发出令牌
+  之前就会拒绝。
+- **节点能看到你的公网地址**——你连的任何服务器都能。结果会在本地记下它，但结果里永远不含
+  邀请串。
+
+完整的威胁模型见 [docs/threat-model.md](docs/threat-model.md)。
 
 ## 许可证
 

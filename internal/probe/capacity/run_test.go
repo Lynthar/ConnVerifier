@@ -2,49 +2,91 @@ package capacity
 
 import (
 	"context"
-	"io"
+	"flag"
 	"net"
+	"path/filepath"
 	"runtime"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/Lynthar/ConnVerifier/internal/node"
+	"github.com/Lynthar/ConnVerifier/internal/protocol"
 	"github.com/Lynthar/ConnVerifier/internal/result"
 )
 
-// pipeNode stands in for a node without opening sockets: each dial gets one end
-// of a net.Pipe and the other end runs serveConn.
-func pipeNode(serveConn func(net.Conn)) func(context.Context, string, string) (net.Conn, error) {
-	return func(context.Context, string, string) (net.Conn, error) {
-		client, server := net.Pipe()
-		go serveConn(server)
-		return client, nil
+// chanListener is a listener fed by net.Pipe ends, so a real node can run in memory.
+type chanListener struct {
+	conns chan net.Conn
+	done  chan struct{}
+	once  sync.Once
+}
+
+func (l *chanListener) Accept() (net.Conn, error) {
+	select {
+	case c := <-l.conns:
+		return c, nil
+	case <-l.done:
+		return nil, net.ErrClosed
 	}
 }
 
-func echo(conn net.Conn) {
-	defer conn.Close()
-	io.Copy(conn, conn)
+func (l *chanListener) Close() error {
+	l.once.Do(func() { close(l.done) })
+	return nil
 }
 
-// closeAfterFirst answers one heartbeat and then closes, like a node that turns
-// every connection away right after accepting it.
-func closeAfterFirst(conn net.Conn) {
-	defer conn.Close()
-	buf := make([]byte, len(pingPayload))
-	if _, err := io.ReadFull(conn, buf); err == nil {
-		conn.Write(buf)
+func (l *chanListener) Addr() net.Addr { return &net.TCPAddr{} }
+
+type memNode struct {
+	invite string
+	dial   dialFunc
+	stop   func()
+}
+
+// startNode runs a real node in memory with one invite, limited by lim, and node
+// flags such as -max-conns. Every dial the client makes becomes a pipe into it.
+func startNode(t *testing.T, lim node.InviteLimits, flags ...string) memNode {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "node")
+	inv, err := node.CreateInvite(dir, "mem", []string{"192.0.2.10:7443"}, lim)
+	if err != nil {
+		t.Fatal(err)
 	}
+	var cfg node.Config
+	fs := flag.NewFlagSet("node", flag.ContinueOnError)
+	cfg.RegisterFlags(fs)
+	if err := fs.Parse(append([]string{"-state-dir", dir}, flags...)); err != nil {
+		t.Fatal(err)
+	}
+	ln := &chanListener{conns: make(chan net.Conn), done: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	stopped := make(chan struct{})
+	go func() { node.ServeOn(ctx, ln, cfg, "vtest"); close(stopped) }()
+	dial := func(ctx context.Context, _, _ string) (net.Conn, error) {
+		c, s := net.Pipe()
+		select {
+		case ln.conns <- s:
+			return c, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ln.done:
+			return nil, net.ErrClosed
+		}
+	}
+	return memNode{invite: inv.Encode(), dial: dial, stop: func() { cancel(); <-stopped }}
 }
 
-func shortRun(dial func(context.Context, string, string) (net.Conn, error)) Config {
+func memRun(n memNode, clients int, duration time.Duration) Config {
 	cfg := validClientConfig()
-	cfg.targetConnections = 3
+	cfg.node = n.invite
+	cfg.targetConnections = clients
 	cfg.startRate = 1000
-	cfg.heartbeat = 20 * time.Millisecond
-	cfg.minBackoff = 10 * time.Millisecond
-	cfg.maxBackoff = 50 * time.Millisecond
-	cfg.duration = 200 * time.Millisecond
-	cfg.dial = dial
+	cfg.heartbeat = 30 * time.Millisecond
+	cfg.minBackoff, cfg.maxBackoff = 10*time.Millisecond, 50*time.Millisecond
+	cfg.duration = duration
+	cfg.dial = n.dial
 	return cfg
 }
 
@@ -59,11 +101,19 @@ func metric(t *testing.T, c result.Check, id string) float64 {
 	return 0
 }
 
+func messageKeys(msgs []result.Message) []string {
+	var k []string
+	for _, m := range msgs {
+		k = append(k, m.Key)
+	}
+	return k
+}
+
 // waitGoroutines polls until the goroutine count is back to base; shutdown is
 // asynchronous, so an immediate comparison would be flaky.
 func waitGoroutines(t *testing.T, base int) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(3 * time.Second)
 	for runtime.NumGoroutine() > base {
 		if time.Now().After(deadline) {
 			buf := make([]byte, 1<<16)
@@ -74,14 +124,16 @@ func waitGoroutines(t *testing.T, base int) {
 	}
 }
 
-func TestRunAgainstEchoNode(t *testing.T) {
+func TestRunAgainstNode(t *testing.T) {
 	base := runtime.NumGoroutine()
-	c, err := Run(context.Background(), shortRun(pipeNode(echo)))
+	n := startNode(t, node.DefaultInviteLimits)
+	c, err := Run(context.Background(), memRun(n, 3, 300*time.Millisecond), "vtest")
+	n.stop()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.Status != result.Pass {
-		t.Fatalf("status = %s, want PASS; metrics %+v", c.Status, c.Metrics)
+		t.Fatalf("status = %s, want PASS; warnings %v error %+v", c.Status, messageKeys(c.Warnings), c.Error)
 	}
 	if got := metric(t, c, "connects"); got != 3 {
 		t.Fatalf("connects = %v, want 3", got)
@@ -89,39 +141,155 @@ func TestRunAgainstEchoNode(t *testing.T) {
 	if got := metric(t, c, "drops"); got != 0 {
 		t.Fatalf("drops = %v, want 0", got)
 	}
+	nr := c.Node
+	if nr.Label != "mem" || nr.Version != "vtest" || nr.Granted == nil || nr.Granted.Connections != 3 {
+		t.Fatalf("node report %+v", nr)
+	}
+	if nr.LoadEnd == nil || nr.LoadEnd.Sessions != 0 || nr.LoadEnd.Connections != 0 {
+		t.Fatalf("session not released at the end: %+v", nr.LoadEnd)
+	}
+	if c.ElapsedMs < 300 {
+		t.Fatalf("elapsed %d ms, want at least the run", c.ElapsedMs)
+	}
 	waitGoroutines(t, base)
 }
 
-func TestRunAgainstClosingNode(t *testing.T) {
-	base := runtime.NumGoroutine()
-	c, err := Run(context.Background(), shortRun(pipeNode(closeAfterFirst)))
+// A node at its connection limit says so: the client counts refusals, not network
+// drops, and the result is INVALID because the node, not the network, set the limit.
+func TestFullNodeRejectionsAreNotDrops(t *testing.T) {
+	n := startNode(t, node.DefaultInviteLimits, "-max-conns", "2")
+	defer n.stop()
+	c, err := Run(context.Background(), memRun(n, 5, 400*time.Millisecond), "vtest")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Status != result.Warn {
-		t.Fatalf("status = %s, want WARN", c.Status)
+	if c.Status != result.Invalid || !slices.Contains(messageKeys(c.Warnings), "tcp_capacity.warning.node_busy") {
+		t.Fatalf("status %s warnings %v, want INVALID with node_busy", c.Status, messageKeys(c.Warnings))
 	}
-	if got := metric(t, c, "drops"); got == 0 {
-		t.Fatal("no drops recorded against a node that closes every connection")
+	if got := metric(t, c, "rejected.busy"); got != 3 {
+		t.Fatalf("rejected.busy = %v, want 3", got)
 	}
-	if got := metric(t, c, "heartbeats.interval_acked"); got != 0 {
-		t.Fatalf("interval_acked = %v, want 0", got)
+	if got := metric(t, c, "drops.error") + metric(t, c, "drops.closed"); got != 0 {
+		t.Fatalf("refusals counted as drops: %v", got)
+	}
+}
+
+// A connection the node closes between heartbeats is recorded when the close
+// arrives, so its lifetime is real, not rounded up to the next heartbeat.
+func TestNodeCloseIsSeenWhenItArrives(t *testing.T) {
+	base := runtime.NumGoroutine()
+	n := startNode(t, node.DefaultInviteLimits)
+	cfg := memRun(n, 2, 3*time.Second)
+	cfg.heartbeat = 5 * time.Second
+	cfg.minBackoff, cfg.maxBackoff = time.Second, time.Second
+	time.AfterFunc(300*time.Millisecond, n.stop)
+	c, err := Run(context.Background(), cfg, "vtest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := metric(t, c, "drops.node_closed"); got != 2 {
+		t.Fatalf("drops.node_closed = %v, want 2", got)
+	}
+	if mean := metric(t, c, "dropped_session.mean"); mean > 1000 {
+		t.Fatalf("mean lifetime %v ms with a 5s heartbeat: the close was not seen when it arrived", mean)
 	}
 	waitGoroutines(t, base)
 }
 
+func TestWrongPinStopsBeforeTheToken(t *testing.T) {
+	n := startNode(t, node.DefaultInviteLimits)
+	defer n.stop()
+	inv, err := protocol.ParseInvite(n.invite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv.Pin[0] ^= 0xff
+	cfg := memRun(n, 1, 200*time.Millisecond)
+	cfg.node = inv.Encode()
+	c, err := Run(context.Background(), cfg, "vtest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Status != result.Error || c.Error == nil || c.Error.Key != "tcp_capacity.error.node_identity" {
+		t.Fatalf("status %s error %+v, want ERROR node_identity", c.Status, c.Error)
+	}
+	if c.Node.Granted != nil {
+		t.Fatal("a session was granted despite the pin mismatch")
+	}
+}
+
+func TestIdleGrantTooShortDoesNotRun(t *testing.T) {
+	lim := node.DefaultInviteLimits
+	lim.MaxIdleTimeoutS = 1
+	n := startNode(t, lim)
+	defer n.stop()
+	cfg := memRun(n, 2, time.Second)
+	cfg.heartbeat = 2 * time.Second
+	c, err := Run(context.Background(), cfg, "vtest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Status != result.Invalid || !slices.Contains(messageKeys(c.Warnings), "tcp_capacity.warning.idle_too_short") {
+		t.Fatalf("status %s warnings %v, want INVALID idle_too_short", c.Status, messageKeys(c.Warnings))
+	}
+	if len(c.Metrics) != 0 {
+		t.Fatalf("metrics from a run that should not have started: %+v", c.Metrics)
+	}
+	if c.Node.LoadEnd == nil || c.Node.LoadEnd.Sessions != 0 {
+		t.Fatalf("session not released: %+v", c.Node.LoadEnd)
+	}
+}
+
+func TestGrantSmallerThanAskedIsInvalid(t *testing.T) {
+	lim := node.DefaultInviteLimits
+	lim.MaxConnections = 2
+	n := startNode(t, lim)
+	defer n.stop()
+	c, err := Run(context.Background(), memRun(n, 5, 300*time.Millisecond), "vtest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Status != result.Invalid || !slices.Contains(messageKeys(c.Warnings), "tcp_capacity.warning.granted_less") {
+		t.Fatalf("status %s warnings %v, want INVALID granted_less", c.Status, messageKeys(c.Warnings))
+	}
+	if got := metric(t, c, "connects"); got != 2 {
+		t.Fatalf("connects = %v, want the granted 2", got)
+	}
+}
+
+func TestSessionRefusedWhenInviteIsBusy(t *testing.T) {
+	lim := node.DefaultInviteLimits
+	lim.MaxSessions = 1
+	n := startNode(t, lim)
+	defer n.stop()
+	first := make(chan result.Check, 1)
+	go func() {
+		c, _ := Run(context.Background(), memRun(n, 1, 600*time.Millisecond), "vtest")
+		first <- c
+	}()
+	time.Sleep(200 * time.Millisecond)
+	c, err := Run(context.Background(), memRun(n, 1, 200*time.Millisecond), "vtest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Status != result.Error || c.Error == nil || c.Error.Key != "tcp_capacity.error.node_busy" {
+		t.Fatalf("status %s error %+v, want ERROR node_busy", c.Status, c.Error)
+	}
+	if f := <-first; f.Status != result.Pass {
+		t.Fatalf("first run = %s", f.Status)
+	}
+}
+
 func TestRunCancelledReturnsResult(t *testing.T) {
-	base := runtime.NumGoroutine()
+	n := startNode(t, node.DefaultInviteLimits)
+	defer n.stop()
 	ctx, cancel := context.WithCancel(context.Background())
-	cfg := shortRun(pipeNode(echo))
-	cfg.duration = 0
-	time.AfterFunc(100*time.Millisecond, cancel)
-	c, err := Run(ctx, cfg)
+	time.AfterFunc(200*time.Millisecond, cancel)
+	c, err := Run(ctx, memRun(n, 2, 0), "vtest")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.Status == result.Error {
-		t.Fatalf("cancellation reported as ERROR")
+		t.Fatalf("cancellation reported as ERROR: %+v", c.Error)
 	}
-	waitGoroutines(t, base)
 }

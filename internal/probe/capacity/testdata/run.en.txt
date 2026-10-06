@@ -1,6 +1,6 @@
 TCP long-lived connections: attention (WARN)
-Node: 192.0.2.10:9000 · IPv4 · TCP
-Method version: 2
+Node: 192.0.2.10:7443 · IPv4 · TCP
+Method version: 3
 Elapsed: 10 min
 Parameters
   Dial timeout: 1 s
@@ -9,18 +9,30 @@ Parameters
   Heartbeat reply timeout: 1 s
   Maximum reconnect wait: 1 s
   Minimum reconnect wait: 100 ms
-  New connections per second, max: 1
+  New connections per second, max: 100
   Target connections: 50
-  TCP keepalive: off
+Reported by the node
+  Name: tokyo-test
+  Version: v0.0.0-test
+  This host's address as the node saw it: 198.51.100.7:51234
+  Granted: 50 connections · 100 new per second · 10.3 min · idle 2 min
+  Load at start: 1 sessions · 0/20000 connections
+  Load at end: 0 sessions · 0/20000 connections
 Observed
   Connections made: 73
-  Failed dials: 2
+  Failed dials: 0
   Failed dials (host out of resources): 0
+  Connected but did not finish the ticket handshake: 0
+  Rejected by the node (full): 0
+  Rejected by the node (over quota): 0
+  Rejected by the node (invalid ticket): 0
+  Rejected by the node (other reason): 0
   Drops: 31
   Drops (no reply in time): 3
   Drops (closed by peer): 1
-  Drops (reset or error): 27
+  Drops (reset or error): 2
   Drops (wrong reply): 0
+  Drops (closed by the node, with a reason): 25
   Heartbeats sent: 233
   Heartbeats acknowledged: 200
   Heartbeats acknowledged after a full idle interval: 120
@@ -32,8 +44,8 @@ Observed
   Host ephemeral ports: 16384
 Inferred
   - Connections that stopped answering without a close or reset: 3. This is the usual sign of a NAT or other middlebox silently dropping connection state.
-  - Connections closed by the far side: 1. Either the node ended them (idle timeout or connection limit) or a middlebox sent the close.
-  - Connections ended by a reset or another error: 27.
+  - Connections closed by the far side without a reason: 1. The node always states a reason before it closes a connection, so this points to a middlebox sending the close, or the node process exiting abnormally.
+  - Connections ended by a reset or another error: 2.
+  - Connections the node closed and said why: 25 (idle_timeout=25). These are not evidence of network drops.
 Not proven
-  - A node turning connections away at its limit cannot be told apart from the network dropping them; the client sees the same thing.
-  - Drops are only noticed at the next heartbeat, so lifetimes are upper bounds, long by up to one heartbeat interval (30 s).
+  - A silently dropped connection is only noticed when a heartbeat reply times out, so its lifetime is an upper bound, long by up to one heartbeat interval (30 s); closed or reset connections are noticed at once.

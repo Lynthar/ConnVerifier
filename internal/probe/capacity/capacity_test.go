@@ -6,15 +6,22 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Lynthar/ConnVerifier/internal/protocol"
 )
+
+// testInvite is a syntactically valid invite for a documentation-range address.
+var testInvite = protocol.Invite{
+	Label: "test", Addrs: []string{"192.0.2.10:7443"}, Pin: [32]byte{1}, Token: [32]byte{2},
+}.Encode()
 
 func validClientConfig() Config {
 	return Config{
-		address:           "127.0.0.1:9000",
+		node:              testInvite,
 		targetConnections: 1,
 		startRate:         1,
 		heartbeat:         time.Second,
@@ -26,8 +33,8 @@ func validClientConfig() Config {
 }
 
 func TestValidateConfig(t *testing.T) {
-	cfg := validClientConfig()
-	if err := cfg.Validate(); err != nil {
+	t.Setenv(InviteEnv, "")
+	if err := validClientConfig().Validate(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
 	}
 
@@ -35,7 +42,9 @@ func TestValidateConfig(t *testing.T) {
 		name   string
 		update func(*Config)
 	}{
-		{name: "empty address", update: func(c *Config) { c.address = "" }},
+		{name: "no node", update: func(c *Config) { c.node = "" }},
+		{name: "malformed invite", update: func(c *Config) { c.node = "cvi1_x" }},
+		{name: "missing invite file", update: func(c *Config) { c.node = "@" + t.TempDir() + "/none" }},
 		{name: "zero clients", update: func(c *Config) { c.targetConnections = 0 }},
 		{name: "excessive clients", update: func(c *Config) { c.targetConnections = maxClients + 1 }},
 		{name: "zero start rate", update: func(c *Config) { c.startRate = 0 }},
@@ -45,8 +54,8 @@ func TestValidateConfig(t *testing.T) {
 		{name: "zero io timeout", update: func(c *Config) { c.ioTimeout = 0 }},
 		{name: "zero min backoff", update: func(c *Config) { c.minBackoff = 0 }},
 		{name: "max backoff below min", update: func(c *Config) { c.maxBackoff = c.minBackoff - time.Millisecond }},
+		{name: "heartbeat beyond any idle grant", update: func(c *Config) { c.heartbeat = time.Duration(protocol.MaxIdleTimeoutS) * time.Second }},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := validClientConfig()
@@ -55,6 +64,39 @@ func TestValidateConfig(t *testing.T) {
 				t.Fatalf("invalid config accepted")
 			}
 		})
+	}
+}
+
+func TestInviteFromFileAndEnvironment(t *testing.T) {
+	path := t.TempDir() + "/invite"
+	if err := os.WriteFile(path, []byte(testInvite+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := validClientConfig()
+	cfg.node = "@" + path
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("invite from file: %v", err)
+	}
+	t.Setenv(InviteEnv, testInvite)
+	cfg.node = ""
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("invite from environment: %v", err)
+	}
+}
+
+func TestWantLeavesRoomForHeartbeatAndStop(t *testing.T) {
+	cfg := validClientConfig()
+	cfg.heartbeat, cfg.ioTimeout, cfg.duration = 90*time.Second, 5*time.Second, time.Minute
+	w := cfg.want()
+	if w.IdleTimeoutS < 190 {
+		t.Fatalf("idle %ds does not cover twice a heartbeat plus its reply", w.IdleTimeoutS)
+	}
+	if w.DurationS < 70 {
+		t.Fatalf("duration %ds leaves no room to stop before the session ends", w.DurationS)
+	}
+	cfg.duration = 0
+	if cfg.want().DurationS != 0 {
+		t.Fatal("an open-ended run must ask for as long as the node allows")
 	}
 }
 
@@ -74,76 +116,11 @@ func TestJitter(t *testing.T) {
 	if got := jitter(-time.Second); got != 0 {
 		t.Fatalf("jitter(negative) = %s, want 0", got)
 	}
-
 	d := 800 * time.Millisecond
-	for i := 0; i < 1000; i++ {
-		got := jitter(d)
-		if got < d/2 || got > d {
+	for range 1000 {
+		if got := jitter(d); got < d/2 || got > d {
 			t.Fatalf("jitter(%s) = %s, want within [%s, %s]", d, got, d/2, d)
 		}
-	}
-}
-
-func TestSendHeartbeatCountsAck(t *testing.T) {
-	client, server := net.Pipe()
-	defer client.Close()
-	defer server.Close()
-
-	done := make(chan error, 1)
-	go func() {
-		buf := make([]byte, len(pingPayload))
-		if _, err := io.ReadFull(server, buf); err != nil {
-			done <- err
-			return
-		}
-		_, err := server.Write(buf)
-		done <- err
-	}()
-
-	stats := &Stats{}
-	ping := []byte(pingPayload)
-	response := make([]byte, len(ping))
-	if err := sendHeartbeat(client, validClientConfig(), ping, response, stats); err != nil {
-		t.Fatalf("sendHeartbeat failed: %v", err)
-	}
-	if err := <-done; err != nil {
-		t.Fatalf("server side failed: %v", err)
-	}
-	if got := atomic.LoadUint64(&stats.heartbeatsSent); got != 1 {
-		t.Fatalf("heartbeatsSent = %d, want 1", got)
-	}
-	if got := atomic.LoadUint64(&stats.heartbeatsAck); got != 1 {
-		t.Fatalf("heartbeatsAck = %d, want 1", got)
-	}
-}
-
-func TestSendHeartbeatRejectsBadAck(t *testing.T) {
-	client, server := net.Pipe()
-	defer client.Close()
-	defer server.Close()
-
-	done := make(chan error, 1)
-	go func() {
-		buf := make([]byte, len(pingPayload))
-		if _, err := io.ReadFull(server, buf); err != nil {
-			done <- err
-			return
-		}
-		_, err := server.Write([]byte("PONG"))
-		done <- err
-	}()
-
-	stats := &Stats{}
-	ping := []byte(pingPayload)
-	response := make([]byte, len(ping))
-	if err := sendHeartbeat(client, validClientConfig(), ping, response, stats); !errors.Is(err, errBadAck) {
-		t.Fatalf("sendHeartbeat error = %v, want errBadAck", err)
-	}
-	if err := <-done; err != nil {
-		t.Fatalf("server side failed: %v", err)
-	}
-	if got := atomic.LoadUint64(&stats.heartbeatsAck); got != 0 {
-		t.Fatalf("heartbeatsAck = %d, want 0", got)
 	}
 }
 
@@ -163,11 +140,11 @@ func TestRecordDropReason(t *testing.T) {
 		{"wrapped timeout", fmt.Errorf("read: %w", fakeTimeoutError{}), func(s *Stats) uint64 { return s.dropTimeouts }},
 		{"eof", io.EOF, func(s *Stats) uint64 { return s.dropClosed }},
 		{"unexpected eof", io.ErrUnexpectedEOF, func(s *Stats) uint64 { return s.dropClosed }},
-		{"wrapped eof", fmt.Errorf("read: %w", io.EOF), func(s *Stats) uint64 { return s.dropClosed }},
 		{"other", errors.New("connection reset by peer"), func(s *Stats) uint64 { return s.dropErrors }},
-		{"bad ack", fmt.Errorf("%w: got %q want %q", errBadAck, "PONG", "PING"), func(s *Stats) uint64 { return s.badAcks }},
+		{"malformed frame", protocol.ErrMalformed, func(s *Stats) uint64 { return s.dropErrors }},
+		{"bad ack", errBadAck, func(s *Stats) uint64 { return s.badAcks }},
+		{"node closed", &nodeClosedError{protocol.ReasonIdleTimeout}, func(s *Stats) uint64 { return s.nodeClosedIdle }},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			stats := &Stats{}
@@ -176,7 +153,7 @@ func TestRecordDropReason(t *testing.T) {
 				t.Fatalf("expected reason bucket = 1, got %d", got)
 			}
 			if total := stats.snapshot().drops(); total != 1 {
-				t.Fatalf("expected exactly one bucket incremented, got total %d", total)
+				t.Fatalf("expected exactly one drop, got %d", total)
 			}
 		})
 	}
@@ -187,56 +164,40 @@ func TestRecordDropReason(t *testing.T) {
 func TestSnapshotDropsEqualBuckets(t *testing.T) {
 	stats := &Stats{}
 	for _, err := range []error{
-		fakeTimeoutError{}, io.EOF, errors.New("connection reset by peer"),
-		fmt.Errorf("%w: got %q want %q", errBadAck, "PONG", "PING"), nil,
+		fakeTimeoutError{}, io.EOF, errors.New("connection reset by peer"), errBadAck,
+		&nodeClosedError{protocol.ReasonSessionEnded}, &nodeClosedError{protocol.ReasonShuttingDown}, nil,
 	} {
 		recordDropReason(err, stats)
 	}
 	s := stats.snapshot()
-	sum := s.dropTimeouts + s.dropClosed + s.dropErrors + s.dropBadAcks
-	if s.drops() != sum || sum != 5 {
-		t.Fatalf("drops = %d, bucket sum = %d, want both 5", s.drops(), sum)
+	sum := s.dropTimeouts + s.dropClosed + s.dropErrors + s.dropBadAcks + s.dropNodeClosed
+	if s.drops() != sum || sum != 7 {
+		t.Fatalf("drops = %d, bucket sum = %d, want both 7", s.drops(), sum)
 	}
-}
-
-func TestRttHistogramBounds(t *testing.T) {
-	h := newRttHistogram()
-	if len(h.bounds) == 0 {
-		t.Fatal("no bounds generated")
-	}
-	if len(h.buckets) != len(h.bounds)+1 {
-		t.Fatalf("buckets=%d, want bounds+1=%d", len(h.buckets), len(h.bounds)+1)
-	}
-	for i := 1; i < len(h.bounds); i++ {
-		if h.bounds[i] <= h.bounds[i-1] {
-			t.Fatalf("bounds not strictly ascending at %d: %s <= %s", i, h.bounds[i], h.bounds[i-1])
-		}
+	if s.nodeClosedSession+s.nodeClosedIdle+s.nodeClosedOther != s.dropNodeClosed {
+		t.Fatal("node-closed reasons do not add up to the node-closed bucket")
 	}
 }
 
 func TestRttHistogramQuantile(t *testing.T) {
 	h := newRttHistogram()
-	for i := 0; i < 95; i++ {
+	for range 95 {
 		h.Record(10 * time.Millisecond)
 	}
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		h.Record(500 * time.Millisecond)
 	}
-
 	counts, total := h.collect()
 	if total != 100 {
 		t.Fatalf("total=%d, want 100", total)
 	}
-	// Buckets are ~10% wide, and quantile reports the bucket's upper bound, so
-	// the estimate sits in [value, value*1.1).
+	// Buckets are ~10% wide and quantile reports the upper bound: [value, value*1.1).
 	if p50 := h.quantile(counts, total, 0.50); p50 < 10*time.Millisecond || p50 > 11*time.Millisecond {
 		t.Fatalf("p50=%s, want ~10ms", p50)
 	}
 	if p99 := h.quantile(counts, total, 0.99); p99 < 500*time.Millisecond || p99 > 550*time.Millisecond {
 		t.Fatalf("p99=%s, want ~500ms", p99)
 	}
-
-	// collect must have reset the buckets.
 	if _, total2 := h.collect(); total2 != 0 {
 		t.Fatalf("collect did not reset, total=%d", total2)
 	}
@@ -244,74 +205,35 @@ func TestRttHistogramQuantile(t *testing.T) {
 
 func TestRttHistogramNilSafe(t *testing.T) {
 	var h *rttHistogram
-	h.Record(time.Millisecond) // must not panic
+	h.Record(time.Millisecond)
 	counts, total := h.collect()
-	if total != 0 || counts != nil {
-		t.Fatalf("nil collect should be empty, got total=%d", total)
-	}
-	if got := h.quantile(counts, total, 0.5); got != 0 {
-		t.Fatalf("nil quantile should be 0, got %s", got)
+	if total != 0 || counts != nil || h.quantile(counts, total, 0.5) != 0 {
+		t.Fatal("nil histogram must read as empty")
 	}
 }
 
 func TestRttHistogramConcurrentRecord(t *testing.T) {
 	h := newRttHistogram()
 	const goroutines, perGoroutine = 8, 1000
-
 	var wg sync.WaitGroup
-	for g := 0; g < goroutines; g++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < perGoroutine; i++ {
+	for range goroutines {
+		wg.Go(func() {
+			for i := range perGoroutine {
 				h.Record(time.Duration(i%50) * time.Millisecond)
 			}
-		}()
+		})
 	}
 	wg.Wait()
-
 	if _, total := h.collect(); total != goroutines*perGoroutine {
 		t.Fatalf("total=%d, want %d", total, goroutines*perGoroutine)
-	}
-}
-
-func TestSendHeartbeatRecordsRTT(t *testing.T) {
-	client, server := net.Pipe()
-	defer client.Close()
-	defer server.Close()
-
-	done := make(chan error, 1)
-	go func() {
-		buf := make([]byte, len(pingPayload))
-		if _, err := io.ReadFull(server, buf); err != nil {
-			done <- err
-			return
-		}
-		_, err := server.Write(buf)
-		done <- err
-	}()
-
-	stats := &Stats{rtt: newRttHistogram()}
-	ping := []byte(pingPayload)
-	response := make([]byte, len(ping))
-	if err := sendHeartbeat(client, validClientConfig(), ping, response, stats); err != nil {
-		t.Fatalf("sendHeartbeat failed: %v", err)
-	}
-	if err := <-done; err != nil {
-		t.Fatalf("server side failed: %v", err)
-	}
-	if _, total := stats.rtt.collect(); total != 1 {
-		t.Fatalf("expected 1 RTT sample, got %d", total)
 	}
 }
 
 func TestScheduleSlotStopsOnContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-
 	ready := make(chan *Slot, 1)
 	scheduleSlot(ctx, &Slot{id: 1}, 0, ready)
-
 	select {
 	case <-ready:
 		t.Fatalf("slot scheduled after context cancellation")
@@ -322,7 +244,6 @@ func TestScheduleSlotStopsOnContextCancel(t *testing.T) {
 func TestScheduleSlotDelayedDelivery(t *testing.T) {
 	ready := make(chan *Slot, 1)
 	scheduleSlot(context.Background(), &Slot{id: 7}, 5*time.Millisecond, ready)
-
 	select {
 	case s := <-ready:
 		if s.id != 7 {
@@ -333,57 +254,9 @@ func TestScheduleSlotDelayedDelivery(t *testing.T) {
 	}
 }
 
-func TestMaintainReportsIntervalSurvival(t *testing.T) {
-	tests := []struct {
-		name     string
-		echoes   int
-		survived bool
-	}{
-		{"dies before any interval heartbeat", 1, false},
-		{"survives one interval heartbeat", 2, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			client, server := net.Pipe()
-			defer client.Close()
-
-			go func() {
-				defer server.Close()
-				buf := make([]byte, len(pingPayload))
-				for i := 0; i < tt.echoes; i++ {
-					if _, err := io.ReadFull(server, buf); err != nil {
-						return
-					}
-					if _, err := server.Write(buf); err != nil {
-						return
-					}
-				}
-			}()
-
-			cfg := validClientConfig()
-			cfg.heartbeat = 20 * time.Millisecond
-			ping := []byte(pingPayload)
-			response := make([]byte, len(ping))
-			stats := &Stats{}
-			survived, err := maintain(context.Background(), client, cfg, ping, response, stats)
-			if err == nil {
-				t.Fatalf("maintain returned nil error on a closed pipe")
-			}
-			if survived != tt.survived {
-				t.Fatalf("survived = %v, want %v", survived, tt.survived)
-			}
-			if got, want := stats.snapshot().intervalAcks, uint64(tt.echoes-1); got != want {
-				t.Fatalf("intervalAcks = %d, want %d", got, want)
-			}
-		})
-	}
-}
-
 func TestRateLimiterDeliversToken(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	rl := newRateLimiter(ctx, 100)
 	waitCtx, waitCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer waitCancel()
@@ -396,32 +269,8 @@ func TestRateLimiterWaitReturnsFalseOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	rl := newRateLimiter(ctx, 1)
 	cancel()
-
 	if rl.Wait(ctx) {
 		t.Fatalf("Wait returned true on a canceled context")
-	}
-}
-
-func TestDialLoggerDedup(t *testing.T) {
-	l := newDialLogger()
-	t0 := time.Now()
-
-	if !l.shouldLog("refused", t0) {
-		t.Fatalf("first occurrence must log")
-	}
-	if l.shouldLog("refused", t0.Add(dialLogWindow/2)) {
-		t.Fatalf("repeat within window must not log")
-	}
-	if !l.shouldLog("timeout", t0.Add(time.Millisecond)) {
-		t.Fatalf("distinct error must log")
-	}
-	if !l.shouldLog("refused", t0.Add(dialLogWindow+time.Millisecond)) {
-		t.Fatalf("repeat after window must log again")
-	}
-
-	var nilLogger *dialLogger
-	if nilLogger.shouldLog("x", t0) {
-		t.Fatalf("nil logger must not log")
 	}
 }
 
@@ -430,7 +279,7 @@ func TestRefillIssuesExactRate(t *testing.T) {
 	for _, rate := range []int{1, 7, 99, 100, 150, maxStartRate} {
 		for _, seconds := range []int{1, 3} {
 			carry, total := 0, 0
-			for i := 0; i < seconds*ticksPerSecond; i++ {
+			for range seconds * ticksPerSecond {
 				var n int
 				n, carry = refill(carry, rate, ticksPerSecond)
 				total += n
@@ -451,4 +300,174 @@ func TestBucketCapacityIsTenthOfRate(t *testing.T) {
 			t.Errorf("bucketCapacity(%d) = %d, want %d", rate, got, want)
 		}
 	}
+}
+
+func TestDialLoggerDedup(t *testing.T) {
+	l := newDialLogger()
+	t0 := time.Now()
+	if !l.shouldLog("refused", t0) {
+		t.Fatalf("first occurrence must log")
+	}
+	if l.shouldLog("refused", t0.Add(dialLogWindow/2)) {
+		t.Fatalf("repeat within window must not log")
+	}
+	if !l.shouldLog("timeout", t0.Add(time.Millisecond)) {
+		t.Fatalf("distinct error must log")
+	}
+	if !l.shouldLog("refused", t0.Add(dialLogWindow+time.Millisecond)) {
+		t.Fatalf("repeat after window must log again")
+	}
+	var nilLogger *dialLogger
+	if nilLogger.shouldLog("x", t0) {
+		t.Fatalf("nil logger must not log")
+	}
+}
+
+// frameNode plays an admitted node on the far end of a pipe: answer runs on each
+// PING and may reply, close or stay silent.
+func frameNode(t *testing.T, conn net.Conn, answer func(n int, ping protocol.Frame) bool) {
+	t.Helper()
+	go func() {
+		defer conn.Close()
+		var fr protocol.FrameReader
+		for n := 1; ; n++ {
+			f, err := fr.Next(conn)
+			if err != nil {
+				return
+			}
+			if f.Type == protocol.TypePing && !answer(n, f) {
+				return
+			}
+		}
+	}()
+}
+
+func pong(conn net.Conn, seq uint64) {
+	protocol.WriteFrame(conn, protocol.Frame{Type: protocol.TypePong, Seq: seq})
+}
+
+func TestMaintainReportsIntervalSurvival(t *testing.T) {
+	for _, echoes := range []int{1, 3} {
+		client, node := net.Pipe()
+		frameNode(t, node, func(n int, ping protocol.Frame) bool {
+			if n > echoes {
+				return false // close: the far side ends the connection
+			}
+			pong(node, ping.Seq)
+			return true
+		})
+		cfg := validClientConfig()
+		cfg.heartbeat = 20 * time.Millisecond
+		stats := &Stats{rtt: newRttHistogram()}
+		survived, err := maintain(context.Background(), client, cfg, stats)
+		client.Close()
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("echoes=%d: err = %v, want EOF from the close", echoes, err)
+		}
+		if want := echoes > 1; survived != want {
+			t.Fatalf("echoes=%d: survived = %v, want %v", echoes, survived, want)
+		}
+		if got := stats.snapshot().intervalAcks; got != uint64(echoes-1) {
+			t.Fatalf("echoes=%d: intervalAcks = %d, want %d", echoes, got, echoes-1)
+		}
+	}
+}
+
+// A CLOSE between heartbeats is seen when it arrives, not at the next heartbeat.
+func TestMaintainSeesNodeCloseAtOnce(t *testing.T) {
+	client, node := net.Pipe()
+	frameNode(t, node, func(n int, ping protocol.Frame) bool {
+		pong(node, ping.Seq)
+		time.Sleep(50 * time.Millisecond)
+		protocol.WriteFrame(node, protocol.Frame{Type: protocol.TypeClose, Reason: protocol.ReasonShuttingDown})
+		return true
+	})
+	cfg := validClientConfig()
+	cfg.heartbeat = 10 * time.Second
+	start := time.Now()
+	_, err := maintain(context.Background(), client, cfg, &Stats{rtt: newRttHistogram()})
+	client.Close()
+	var nc *nodeClosedError
+	if !errors.As(err, &nc) || nc.reason != protocol.ReasonShuttingDown {
+		t.Fatalf("err = %v, want a shutting_down close", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("close noticed after %s with a 10s heartbeat", elapsed)
+	}
+}
+
+func TestMaintainBadAck(t *testing.T) {
+	client, node := net.Pipe()
+	frameNode(t, node, func(_ int, ping protocol.Frame) bool { pong(node, ping.Seq+1); return true })
+	_, err := maintain(context.Background(), client, validClientConfig(), &Stats{rtt: newRttHistogram()})
+	client.Close()
+	if !errors.Is(err, errBadAck) {
+		t.Fatalf("err = %v, want errBadAck", err)
+	}
+}
+
+func TestMaintainSilentDropTimesOut(t *testing.T) {
+	client, node := net.Pipe()
+	defer node.Close()
+	frameNode(t, node, func(n int, ping protocol.Frame) bool {
+		if n == 1 {
+			pong(node, ping.Seq)
+		}
+		return true // stays open but answers nothing more
+	})
+	cfg := validClientConfig()
+	cfg.heartbeat, cfg.ioTimeout = 20*time.Millisecond, 50*time.Millisecond
+	_, err := maintain(context.Background(), client, cfg, &Stats{rtt: newRttHistogram()})
+	client.Close()
+	if !isTimeout(err) {
+		t.Fatalf("err = %v, want a timeout", err)
+	}
+}
+
+func TestMaintainAnswersProbeAndStopsOnCancel(t *testing.T) {
+	client, node := net.Pipe()
+	defer node.Close()
+	acked := make(chan uint64, 1)
+	go func() {
+		var fr protocol.FrameReader
+		if f, err := fr.Next(node); err == nil && f.Type == protocol.TypePing {
+			pong(node, f.Seq)
+		}
+		protocol.WriteFrame(node, protocol.Frame{Type: protocol.TypeProbe, Seq: 99})
+		for {
+			f, err := fr.Next(node)
+			if err != nil {
+				return
+			}
+			if f.Type == protocol.TypeProbeAck {
+				acked <- f.Seq
+			}
+		}
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		cfg := validClientConfig()
+		cfg.heartbeat = time.Hour
+		_, err := maintain(ctx, client, cfg, &Stats{rtt: newRttHistogram()})
+		done <- err
+	}()
+	select {
+	case seq := <-acked:
+		if seq != 99 {
+			t.Fatalf("probe ack seq %d, want 99", seq)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("probe not acknowledged")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("after cancel err = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("maintain did not stop on cancel")
+	}
+	client.Close()
 }

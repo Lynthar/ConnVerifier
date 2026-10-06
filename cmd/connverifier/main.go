@@ -29,7 +29,8 @@ const usage = `usage: connverifier <command> [flags]
 
 commands:
   capacity   hold N long-lived TCP connections against a node and report drops
-  serve      run the echo node that capacity connects to
+  serve      run a node that clients measure against
+  invite     create, list or revoke the invites a node accepts
   version    print the build version
 
 Run "connverifier <command> -h" for the flags of a command.
@@ -63,7 +64,7 @@ func main() {
 		invalidIf(out.resolve())
 		confirm(out.cat, cfg.Notice(), yes)
 		started := time.Now()
-		check, err := capacity.Run(ctx, cfg)
+		check, err := capacity.Run(ctx, cfg, buildVersion())
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -77,9 +78,11 @@ func main() {
 		var cfg node.Config
 		parse(cmd, args, cfg.RegisterFlags)
 		invalidIf(cfg.Validate())
-		if err := node.Serve(ctx, cfg); err != nil {
+		if err := node.Serve(ctx, cfg, buildVersion()); err != nil {
 			log.Fatal(err)
 		}
+	case "invite":
+		runInvite(args)
 	case "version":
 		parse(cmd, args, func(*flag.FlagSet) {})
 		fmt.Printf("connverifier %s %s %s/%s\n", buildVersion(), runtime.Version(), runtime.GOOS, runtime.GOARCH)

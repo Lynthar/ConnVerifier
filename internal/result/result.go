@@ -60,6 +60,32 @@ type Check struct {
 	NotProven     []Message      `json:"not_proven,omitempty"`
 	Warnings      []Message      `json:"warnings,omitempty"`
 	Error         *Message       `json:"error,omitempty"`
+	Node          *NodeReport    `json:"node,omitempty"`
+}
+
+// NodeReport holds what the node said about itself, kept apart from the client's
+// own metrics. ObservedAddr is the client's public address: sensitive.
+type NodeReport struct {
+	Label        string    `json:"label"`
+	Version      string    `json:"version,omitempty"`
+	ObservedAddr string    `json:"observed_addr,omitempty"`
+	Granted      *Grant    `json:"granted,omitempty"`
+	LoadStart    *NodeLoad `json:"load_start,omitempty"`
+	LoadEnd      *NodeLoad `json:"load_end,omitempty"`
+}
+
+type Grant struct {
+	Connections  int `json:"connections"`
+	DialRate     int `json:"dial_rate"`
+	DurationS    int `json:"duration_s"`
+	IdleTimeoutS int `json:"idle_timeout_s"`
+}
+
+type NodeLoad struct {
+	Sessions       int   `json:"sessions"`
+	Connections    int   `json:"connections"`
+	MaxConnections int   `json:"max_connections"`
+	UptimeS        int64 `json:"uptime_s"`
 }
 
 type Path struct {

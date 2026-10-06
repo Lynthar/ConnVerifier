@@ -62,6 +62,10 @@ func writeCheck(b *strings.Builder, c result.Check, cat *i18n.Catalog) {
 		}
 	}
 
+	if n := c.Node; n != nil {
+		writeNode(b, field, n, cat)
+	}
+
 	b.WriteString(cat.Text("section.metrics", nil) + "\n")
 	for _, m := range c.Metrics {
 		field("  ", cat.Text("metric."+m.ID, nil), metricText(cat, m))
@@ -102,6 +106,35 @@ func messageParams(params map[string]any) map[string]any {
 		out[name] = v
 	}
 	return out
+}
+
+// writeNode renders what the node reported about itself, under its own heading so
+// it is never read as something the client measured.
+func writeNode(b *strings.Builder, field func(indent, label, value string), n *result.NodeReport, cat *i18n.Catalog) {
+	b.WriteString(cat.Text("section.node", nil) + "\n")
+	field("  ", cat.Text("node.label", nil), n.Label)
+	if n.Version != "" {
+		field("  ", cat.Text("node.version", nil), n.Version)
+	}
+	if n.ObservedAddr != "" {
+		field("  ", cat.Text("node.observed_addr", nil), n.ObservedAddr)
+	}
+	if g := n.Granted; g != nil {
+		field("  ", cat.Text("node.granted", nil), Message(cat, result.Message{Key: "node.grant_value", Params: map[string]any{
+			"connections": g.Connections, "rate": g.DialRate,
+			"duration_ms": g.DurationS * 1000, "idle_ms": g.IdleTimeoutS * 1000,
+		}}))
+	}
+	for _, l := range []struct {
+		key  string
+		load *result.NodeLoad
+	}{{"node.load_start", n.LoadStart}, {"node.load_end", n.LoadEnd}} {
+		if l.load != nil {
+			field("  ", cat.Text(l.key, nil), cat.Text("node.load_value", map[string]any{
+				"sessions": l.load.Sessions, "connections": l.load.Connections, "max": l.load.MaxConnections,
+			}))
+		}
+	}
 }
 
 func pathText(p result.Path) string {

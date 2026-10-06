@@ -98,7 +98,7 @@ func TestClientTLSTrustsOnlyThePinnedKey(t *testing.T) {
 	if err := handshake(node); err != nil {
 		t.Fatalf("handshake with the pinned node failed: %v", err)
 	}
-	if err := handshake(impostor); !errors.Is(err, errPinMismatch) {
+	if err := handshake(impostor); !errors.Is(err, ErrPinMismatch) {
 		t.Fatalf("handshake with another key = %v, want pin mismatch", err)
 	}
 }

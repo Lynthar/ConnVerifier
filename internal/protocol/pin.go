@@ -13,7 +13,8 @@ import (
 	"time"
 )
 
-var errPinMismatch = errors.New("node key does not match the invite")
+// ErrPinMismatch means the node presented a key other than the one in the invite.
+var ErrPinMismatch = errors.New("node key does not match the invite")
 
 // Pin is the SHA-256 of a certificate's SubjectPublicKeyInfo: the node's identity.
 func Pin(cert *x509.Certificate) [32]byte {
@@ -30,11 +31,11 @@ func ClientTLS(pin [32]byte) *tls.Config {
 		InsecureSkipVerify: true,
 		VerifyConnection: func(cs tls.ConnectionState) error {
 			if len(cs.PeerCertificates) == 0 {
-				return errPinMismatch
+				return ErrPinMismatch
 			}
 			got := Pin(cs.PeerCertificates[0])
 			if subtle.ConstantTimeCompare(got[:], pin[:]) != 1 {
-				return errPinMismatch
+				return ErrPinMismatch
 			}
 			return nil
 		},

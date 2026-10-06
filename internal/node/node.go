@@ -1,77 +1,155 @@
-// Package node is the echo endpoint that clients hold connections against: it
-// reflects every byte and drops peers that stay idle past the configured timeout.
+// Package node is the endpoint clients measure against. One TCP port carries both
+// the HTTPS control plane and the long-connection data plane; every client holds
+// an invite, and every count the node keeps has a hard limit.
 package node
 
 import (
 	"context"
+	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net"
+	"net/http"
+	"net/netip"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/Lynthar/ConnVerifier/internal/netx"
+	"github.com/Lynthar/ConnVerifier/internal/protocol"
+)
+
+const (
+	handshakeTimeout = 10 * time.Second // accept to TLS handshake or HELLO done
+	writeTimeout     = 5 * time.Second
+	maxPendingPerIP  = 32
+	maxPendingTotal  = 1024
+	maxHTTPPerIP     = 8
+	maxHTTPTotal     = 512
+	requestRate      = 10 // control-plane requests per second per source address
+	statsInterval    = 10 * time.Second
 )
 
 type Config struct {
-	address        string
+	listen         string
+	stateDir       string
 	maxConns       int
-	idleTimeout    time.Duration
-	tcpKeepAlive   time.Duration
+	maxSessions    int
 	logConnections bool
-}
-
-type Stats struct {
-	accepted uint64
-	rejected uint64
-	closed   uint64
-	active   int64
 }
 
 // RegisterFlags binds cfg to fs under the command-line names and defaults.
 func (cfg *Config) RegisterFlags(fs *flag.FlagSet) {
-	fs.StringVar(&cfg.address, "addr", ":9000", "TCP listen address")
-	fs.IntVar(&cfg.maxConns, "max-conns", 10000, "maximum concurrent connections; set <=0 for unlimited")
-	fs.DurationVar(&cfg.idleTimeout, "idle-timeout", 2*time.Minute, "idle timeout per connection; set <=0 to disable")
-	fs.DurationVar(&cfg.tcpKeepAlive, "tcp-keepalive", 0, "TCP keepalive probe interval on accepted connections; <=0 disables (keepalive refreshes NAT mappings and masks the idle timeout under test)")
-	fs.BoolVar(&cfg.logConnections, "log-connections", false, "log every connection open and close")
+	fs.StringVar(&cfg.listen, "listen", ":7443", "TCP address to listen on (control plane and data plane share it)")
+	fs.StringVar(&cfg.stateDir, "state-dir", DefaultStateDir(), "directory holding the node key and invites")
+	fs.IntVar(&cfg.maxConns, "max-conns", 20000, "live data-plane connections across all sessions")
+	fs.IntVar(&cfg.maxSessions, "max-sessions", 64, "sessions across all invites")
+	fs.BoolVar(&cfg.logConnections, "log-connections", false, "log each session with its invite label and client address")
 }
 
-// Serve accepts and echoes connections until ctx ends. It returns an error when
-// cfg is invalid or the listener cannot be opened; otherwise nil after shutdown.
-func Serve(ctx context.Context, cfg Config) error {
-	if err := cfg.Validate(); err != nil {
-		return fmt.Errorf("invalid configuration: %w", err)
+// Validate reports the first setting that is out of range.
+func (cfg Config) Validate() error {
+	switch {
+	case cfg.listen == "":
+		return errors.New("listen must not be empty")
+	case cfg.stateDir == "":
+		return errors.New("state-dir must not be empty")
+	case cfg.maxConns < 1 || cfg.maxConns > protocol.MaxConnections:
+		return fmt.Errorf("max-conns must be 1 to %d", protocol.MaxConnections)
+	case cfg.maxSessions < 1:
+		return errors.New("max-sessions must be positive")
 	}
-
-	listener, err := netx.Listen(ctx, cfg.address, cfg.tcpKeepAlive)
-	if err != nil {
-		return fmt.Errorf("listen failed: %w", err)
-	}
-	serve(ctx, listener, cfg)
 	return nil
 }
 
-// serve runs the accept loop on listener until ctx ends, then closes it.
-func serve(ctx context.Context, listener net.Listener, cfg Config) {
-	log.Printf("echo server listening on %s max_conns=%d idle_timeout=%s tcp_keepalive=%s",
-		listener.Addr(), cfg.maxConns, cfg.idleTimeout, cfg.tcpKeepAlive)
+type counters struct {
+	rejectedBusy, rejectedQuota, rejectedAuth, rejectedVersion, refusedPending atomic.Uint64
+}
 
-	stats := &Stats{}
-	go reportStats(ctx, stats)
+type server struct {
+	cfg       Config
+	version   string
+	tls       *tls.Config
+	store     *store
+	pending   *pending
+	httpConns *pending
+	requests  *requestLimiter
+	stats     counters
+	wg        sync.WaitGroup
+}
 
-	// Unblock Accept on shutdown so the loop can exit cleanly.
-	go func() {
-		<-ctx.Done()
-		listener.Close()
-	}()
+// Serve listens on the configured address and runs the node until ctx ends.
+// version is reported to clients.
+func Serve(ctx context.Context, cfg Config, version string) error {
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
+	}
+	ln, err := netx.Listen(ctx, cfg.listen, 0)
+	if err != nil {
+		return fmt.Errorf("listen failed: %w", err)
+	}
+	return ServeOn(ctx, ln, cfg, version)
+}
 
-	limit := makeConnectionLimit(cfg.maxConns)
+// ServeOn runs the node on ln until ctx ends, then closes ln. The caller must
+// have created ln through netx, or accepted connections may carry keepalive.
+func ServeOn(ctx context.Context, ln net.Listener, cfg Config, version string) error {
+	cert, err := LoadIdentity(cfg.stateDir)
+	if err != nil {
+		ln.Close()
+		return err
+	}
+	if _, err := loadInvites(cfg.stateDir); err != nil {
+		ln.Close()
+		return err
+	}
+	pin := protocol.Pin(cert.Leaf)
+	log.Printf("node listening on %s key=%s max_conns=%d max_sessions=%d state=%s",
+		ln.Addr(), protocol.EncodeID(pin[:]), cfg.maxConns, cfg.maxSessions, cfg.stateDir)
+	newServer(cfg, version, cert).serve(ctx, ln)
+	return nil
+}
+
+func newServer(cfg Config, version string, cert tls.Certificate) *server {
+	now := time.Now()
+	return &server{
+		cfg:       cfg,
+		version:   version,
+		tls:       protocol.ServerTLS(cert),
+		store:     newStore(cfg.maxConns, cfg.maxSessions, now),
+		pending:   newPending(maxPendingPerIP, maxPendingTotal),
+		httpConns: newPending(maxHTTPPerIP, maxHTTPTotal),
+		requests:  newRequestLimiter(requestRate),
+	}
+}
+
+// serve accepts on ln until ctx ends, then closes every connection with a reason
+// and waits for its goroutines.
+func (s *server) serve(ctx context.Context, ln net.Listener) {
+	httpLn := newConnListener(ln.Addr())
+	hs := &http.Server{
+		Handler:           s.routes(),
+		ReadHeaderTimeout: handshakeTimeout,
+		ReadTimeout:       handshakeTimeout,
+		WriteTimeout:      handshakeTimeout,
+		IdleTimeout:       time.Minute,
+		MaxHeaderBytes:    8 << 10,
+		ConnState: func(c net.Conn, st http.ConnState) {
+			if st == http.StateClosed || st == http.StateHijacked {
+				s.httpConns.release(remoteIP(c))
+			}
+		},
+	}
+	s.wg.Add(3)
+	go func() { defer s.wg.Done(); hs.Serve(httpLn) }()
+	go func() { defer s.wg.Done(); s.expireLoop(ctx) }()
+	go func() { defer s.wg.Done(); s.statsLoop(ctx) }()
+	go func() { <-ctx.Done(); ln.Close() }()
 
 	for {
-		conn, err := listener.Accept()
+		conn, err := ln.Accept()
 		if err != nil {
 			if ctx.Err() != nil {
 				break
@@ -80,123 +158,67 @@ func serve(ctx context.Context, listener net.Listener, cfg Config) {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-
-		if !acquireConnection(limit) {
-			atomic.AddUint64(&stats.rejected, 1)
-			if cfg.logConnections {
-				log.Printf("connection rejected from %s active=%d rejected=%d",
-					conn.RemoteAddr(), atomic.LoadInt64(&stats.active), atomic.LoadUint64(&stats.rejected))
-			}
+		addr := remoteIP(conn)
+		if !s.pending.acquire(addr) {
+			s.stats.refusedPending.Add(1)
 			conn.Close()
 			continue
 		}
-
-		atomic.AddUint64(&stats.accepted, 1)
-		atomic.AddInt64(&stats.active, 1)
-		go handle(conn, cfg, func() {
-			releaseConnection(limit)
-			atomic.AddInt64(&stats.active, -1)
-			atomic.AddUint64(&stats.closed, 1)
-		})
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.route(ctx, conn, addr, httpLn)
+		}()
 	}
 
-	log.Printf("shutdown: stopped accepting; active=%d accepted=%d rejected=%d closed=%d",
-		atomic.LoadInt64(&stats.active), atomic.LoadUint64(&stats.accepted),
-		atomic.LoadUint64(&stats.rejected), atomic.LoadUint64(&stats.closed))
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	hs.Shutdown(shutdownCtx)
+	closeAll(s.store.end(func(*session) bool { return true }), protocol.ReasonShuttingDown)
+	s.wg.Wait()
+	l := s.store.load()
+	log.Printf("shutdown: sessions=%d connections=%d", l.Sessions, l.Connections)
 }
 
-func reportStats(ctx context.Context, stats *Stats) {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
+func (s *server) expireLoop(ctx context.Context) {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			log.Printf("stats active=%d accepted=%d rejected=%d closed=%d",
-				atomic.LoadInt64(&stats.active),
-				atomic.LoadUint64(&stats.accepted),
-				atomic.LoadUint64(&stats.rejected),
-				atomic.LoadUint64(&stats.closed),
-			)
+		case now := <-t.C:
+			conns := s.store.end(func(sess *session) bool { return !now.Before(sess.expires) })
+			closeAll(conns, protocol.ReasonSessionEnded)
 		}
 	}
 }
 
-// Validate reports the first setting that is out of range.
-func (cfg Config) Validate() error {
-	if cfg.address == "" {
-		return fmt.Errorf("addr must not be empty")
-	}
-	return nil
-}
-
-func makeConnectionLimit(maxConns int) chan struct{} {
-	if maxConns <= 0 {
-		return nil
-	}
-	return make(chan struct{}, maxConns)
-}
-
-func acquireConnection(limit chan struct{}) bool {
-	if limit == nil {
-		return true
-	}
-	select {
-	case limit <- struct{}{}:
-		return true
-	default:
-		return false
-	}
-}
-
-func releaseConnection(limit chan struct{}) {
-	if limit == nil {
-		return
-	}
-	<-limit
-}
-
-func handle(conn net.Conn, cfg Config, done func()) {
-	defer conn.Close()
-	if done != nil {
-		defer done()
-	}
-	if cfg.logConnections {
-		log.Printf("connection opened from %s", conn.RemoteAddr())
-		defer log.Printf("connection closed from %s", conn.RemoteAddr())
-	}
-
-	buf := make([]byte, 4096)
+func (s *server) statsLoop(ctx context.Context) {
+	t := time.NewTicker(statsInterval)
+	defer t.Stop()
 	for {
-		if cfg.idleTimeout > 0 {
-			if err := conn.SetDeadline(time.Now().Add(cfg.idleTimeout)); err != nil {
-				log.Printf("set deadline failed for %s: %v", conn.RemoteAddr(), err)
-				return
-			}
-		}
-
-		n, err := conn.Read(buf)
-		if n > 0 {
-			if writeErr := netx.WriteFull(conn, buf[:n]); writeErr != nil {
-				if cfg.logConnections {
-					log.Printf("echo write error to %s: %v", conn.RemoteAddr(), writeErr)
-				}
-				return
-			}
-		}
-		if err != nil {
-			if cfg.logConnections {
-				if err == io.EOF {
-					log.Printf("remote closed %s", conn.RemoteAddr())
-				} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					log.Printf("idle timeout from %s", conn.RemoteAddr())
-				} else {
-					log.Printf("read error from %s: %v", conn.RemoteAddr(), err)
-				}
-			}
+		select {
+		case <-ctx.Done():
 			return
+		case <-t.C:
+			l := s.store.load()
+			log.Printf("stats sessions=%d connections=%d rejected_busy=%d rejected_quota=%d rejected_auth=%d refused_unauthenticated=%d",
+				l.Sessions, l.Connections, s.stats.rejectedBusy.Load(), s.stats.rejectedQuota.Load(),
+				s.stats.rejectedAuth.Load(), s.stats.refusedPending.Load())
 		}
 	}
+}
+
+func (s *server) nodeInfo() protocol.NodeInfo {
+	return protocol.NodeInfo{Version: s.version, Load: s.store.load()}
+}
+
+// remoteIP is the peer address with any IPv4-in-IPv6 mapping removed, so a client
+// cannot get two budgets from one dual-stack listener.
+func remoteIP(c net.Conn) netip.Addr {
+	if ap, err := netip.ParseAddrPort(c.RemoteAddr().String()); err == nil {
+		return ap.Addr().Unmap()
+	}
+	return netip.Addr{}
 }
