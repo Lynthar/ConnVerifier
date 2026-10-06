@@ -18,11 +18,16 @@ import (
 
 func openFDs(t *testing.T) int {
 	t.Helper()
-	entries, err := os.ReadDir("/dev/fd")
+	dir, err := os.Open("/dev/fd")
 	if err != nil {
 		t.Fatalf("list open descriptors: %v", err)
 	}
-	return len(entries)
+	defer dir.Close()
+	names, err := dir.Readdirnames(-1) // names only: a stat races descriptors closing elsewhere
+	if err != nil {
+		t.Fatalf("list open descriptors: %v", err)
+	}
+	return len(names)
 }
 
 // The only capacity test on real sockets: client and node over loopback, TLS

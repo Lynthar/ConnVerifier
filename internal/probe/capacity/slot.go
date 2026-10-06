@@ -205,9 +205,9 @@ func (p *pool) openConn(ctx context.Context) (net.Conn, error) {
 
 	var nonce [16]byte
 	rand.Read(nonce[:])
-	stop := context.AfterFunc(ctx, func() { conn.SetDeadline(time.Now()) })
-	defer stop()
 	conn.SetDeadline(time.Now().Add(p.cfg.ioTimeout))
+	stop := context.AfterFunc(ctx, func() { conn.SetDeadline(time.Now()) }) // after, or it is overwritten
+	defer stop()
 	_, err = conn.Write(protocol.NewHello(p.secret, p.sessionID, nonce).MarshalBinary())
 	var f protocol.Frame
 	if err == nil {
@@ -298,6 +298,9 @@ func maintain(ctx context.Context, conn net.Conn, cfg Config, stats *Stats) (sur
 			deadline = sentAt.Add(cfg.ioTimeout)
 		}
 		conn.SetReadDeadline(deadline)
+		if ctx.Err() != nil { // a cancel before this deadline would be overwritten by it
+			return survived, ctx.Err()
+		}
 		f, err := fr.Next(conn)
 		if ctx.Err() != nil {
 			return survived, ctx.Err()

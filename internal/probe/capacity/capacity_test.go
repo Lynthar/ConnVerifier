@@ -471,3 +471,29 @@ func TestMaintainAnswersProbeAndStopsOnCancel(t *testing.T) {
 	}
 	client.Close()
 }
+
+// A cancel that lands between reads must not be overwritten by the next read deadline.
+func TestMaintainStopsWhenCancelledBetweenReads(t *testing.T) {
+	client, node := net.Pipe()
+	defer node.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan error, 1)
+	go func() {
+		cfg := validClientConfig()
+		cfg.heartbeat, cfg.ioTimeout = time.Hour, time.Hour
+		_, err := maintain(ctx, client, cfg, &Stats{rtt: newRttHistogram()})
+		done <- err
+	}()
+	time.Sleep(50 * time.Millisecond) // hold the PING write until the cancel has set its deadline
+	go io.Copy(io.Discard, node)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("maintain missed a cancel that landed between reads")
+	}
+	client.Close()
+}
