@@ -9,12 +9,10 @@ import (
 	"flag"
 	"fmt"
 	"math"
-	"net/netip"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/Lynthar/ConnVerifier/internal/netx"
+	"github.com/Lynthar/ConnVerifier/internal/probe/nodeclient"
 	"github.com/Lynthar/ConnVerifier/internal/protocol"
 	"github.com/Lynthar/ConnVerifier/internal/result"
 )
@@ -24,7 +22,6 @@ const (
 	maxClients    = 1000000
 	limiterTick   = 10 * time.Millisecond
 	dialLogWindow = 10 * time.Second
-	endTimeout    = 5 * time.Second
 	// sessionMargin is how long before the session's end the run stops, so the
 	// node's CLOSE at expiry never lands on a connection still being measured.
 	sessionMargin = 5 * time.Second
@@ -34,10 +31,6 @@ const (
 // fdReserve is the descriptors a run needs besides its connections: stdio, the
 // runtime's poller and the like.
 const fdReserve = 32
-
-// InviteEnv names the variable read when -node is not given; an invite there stays
-// out of shell history and process listings.
-const InviteEnv = "CONNVERIFIER_NODE"
 
 type Config struct {
 	node              string
@@ -50,12 +43,12 @@ type Config struct {
 	maxBackoff        time.Duration
 	duration          time.Duration
 	logDrops          bool
-	dial              dialFunc // nil: netx
+	dial              nodeclient.DialFunc // nil: netx
 }
 
 // RegisterFlags binds cfg to fs under the command-line names and defaults.
 func (cfg *Config) RegisterFlags(fs *flag.FlagSet) {
-	fs.StringVar(&cfg.node, "node", "", "invite of the node to test, or @FILE to read it from a file (default: $"+InviteEnv+")")
+	fs.StringVar(&cfg.node, "node", "", "invite of the node to test, or @FILE to read it from a file (default: $"+nodeclient.InviteEnv+")")
 	fs.IntVar(&cfg.targetConnections, "clients", 1000, "target number of concurrent connections")
 	fs.IntVar(&cfg.startRate, "start-rate", 100, "max new connections started per second")
 	fs.DurationVar(&cfg.heartbeat, "heartbeat", 30*time.Second, "heartbeat interval")
@@ -68,23 +61,7 @@ func (cfg *Config) RegisterFlags(fs *flag.FlagSet) {
 }
 
 // invite resolves -node: an invite string, @FILE, or the environment variable.
-func (cfg Config) invite() (protocol.Invite, error) {
-	s := cfg.node
-	if s == "" {
-		s = os.Getenv(InviteEnv)
-	}
-	if s == "" {
-		return protocol.Invite{}, fmt.Errorf("no node given: use -node INVITE, -node @FILE or set %s", InviteEnv)
-	}
-	if path, ok := strings.CutPrefix(s, "@"); ok {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return protocol.Invite{}, err
-		}
-		s = string(data)
-	}
-	return protocol.ParseInvite(s)
-}
+func (cfg Config) invite() (protocol.Invite, error) { return nodeclient.ResolveInvite(cfg.node) }
 
 // Validate reports the first setting that is out of range.
 func (cfg Config) Validate() error {
@@ -162,38 +139,38 @@ func Run(ctx context.Context, cfg Config, version string) (c result.Check, err e
 	c = newCheck(cfg, inv.Addrs[0], inv.Label)
 	defer func() { c.ElapsedMs = time.Since(start).Milliseconds() }()
 
-	sess, err := openSession(ctx, inv, dial, cfg.dialTimeout, version, cfg.want())
+	sess, err := nodeclient.Open(ctx, inv, dial, cfg.dialTimeout, version, protocol.CheckTCPCapacity, cfg.want())
 	if err != nil {
-		var se *sessionError
+		var se *nodeclient.Error
 		if errors.As(err, &se) {
-			sessionFailed(&c, se)
+			nodeclient.Failed(&c, se)
 			return c, nil
 		}
 		return result.Check{}, err
 	}
-	g := sess.resp.Granted
-	c.Path = newCheck(cfg, sess.addr, inv.Label).Path
-	c.Node.Version = sess.resp.Node.Version
-	c.Node.ObservedAddr = sess.resp.ObservedAddr
+	g := sess.Resp.Granted
+	c.Path = newCheck(cfg, sess.Addr, inv.Label).Path
+	c.Node.Version = sess.Resp.Node.Version
+	c.Node.ObservedAddr = sess.Resp.ObservedAddr
 	c.Node.Granted = &result.Grant{Connections: g.Connections, DialRate: g.DialRate, DurationS: g.DurationS, IdleTimeoutS: g.IdleTimeoutS}
-	c.Node.LoadStart = nodeLoad(&sess.resp.Node)
+	c.Node.LoadStart = nodeclient.Load(&sess.Resp.Node)
 
 	if need := cfg.heartbeat + cfg.ioTimeout; time.Duration(g.IdleTimeoutS)*time.Second < need {
-		c.Node.LoadEnd = nodeLoad(sess.end())
+		c.Node.LoadEnd = nodeclient.EndLoad(sess.End())
 		idleTooShort(&c, g, need)
 		return c, nil
 	}
 
-	runCtx, cancel, nodeDeadline := runWindow(ctx, cfg.duration, start, sess.created, g)
+	runCtx, cancel, nodeDeadline := runWindow(ctx, cfg.duration, start, sess.Created, g)
 	stats := &Stats{rtt: newRttHistogram(), host: readHostLimits()}
 	if c.Path.Family != "" {
 		stats.family.Store(&c.Path.Family)
 	}
 	p := &pool{
 		cfg:       cfg,
-		addr:      sess.addr,
-		sessionID: sess.id,
-		secret:    sess.secret,
+		addr:      sess.Addr,
+		sessionID: sess.ID,
+		secret:    sess.Secret,
 		target:    min(cfg.targetConnections, g.Connections),
 		rate:      min(cfg.startRate, g.DialRate),
 		dial:      dial,
@@ -202,7 +179,7 @@ func Run(ctx context.Context, cfg Config, version string) (c result.Check, err e
 	f := p.run(runCtx)
 	nodeCut := nodeDeadline && errors.Is(runCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
 	cancel()
-	c.Node.LoadEnd = nodeLoad(sess.end()) // after every slot has closed its connection
+	c.Node.LoadEnd = nodeclient.EndLoad(sess.End()) // after every slot has closed its connection
 	if c.Path.Family == "" {
 		c.Path.Family = f.snap.family
 	}
@@ -215,7 +192,7 @@ func newCheck(cfg Config, addr, label string) result.Check {
 	return result.Check{
 		ID:            "tcp-capacity",
 		MethodVersion: 3,
-		Path:          result.Path{Node: addr, Family: literalFamily(addr), Protocol: "tcp"},
+		Path:          result.Path{Node: addr, Family: nodeclient.Family(addr), Protocol: "tcp"},
 		Params:        cfg.params(),
 		Metrics:       []result.Metric{},
 		Node:          &result.NodeReport{Label: label},
@@ -234,25 +211,6 @@ func runWindow(ctx context.Context, duration time.Duration, start, created time.
 	}
 	ctx, cancel := context.WithDeadline(ctx, stopAt)
 	return ctx, cancel, true
-}
-
-func literalFamily(hostPort string) string {
-	ap, err := netip.ParseAddrPort(hostPort)
-	switch {
-	case err != nil:
-		return ""
-	case ap.Addr().Unmap().Is4():
-		return "ipv4"
-	}
-	return "ipv6"
-}
-
-func nodeLoad(n *protocol.NodeInfo) *result.NodeLoad {
-	if n == nil {
-		return nil
-	}
-	l := n.Load
-	return &result.NodeLoad{Sessions: l.Sessions, Connections: l.Connections, MaxConnections: l.MaxConnections, UptimeS: l.UptimeS}
 }
 
 // params records the settings the user asked for, with "until interrupted" as 0.

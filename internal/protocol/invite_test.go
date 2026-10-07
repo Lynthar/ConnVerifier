@@ -82,9 +82,28 @@ func TestParseInviteRejects(t *testing.T) {
 
 func TestParseInviteAcceptsHostnameAndUnknownFields(t *testing.T) {
 	pin := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
-	s := encodeRaw(fmt.Sprintf(`{"l":"家","a":["node.example:443"],"p":%q,"t":%q,"u":["future"]}`, pin, pin))
+	s := encodeRaw(fmt.Sprintf(`{"l":"家","a":["node.example:443"],"p":%q,"t":%q,"z":["future"]}`, pin, pin))
 	if _, err := ParseInvite(s); err != nil {
 		t.Fatalf("ParseInvite: %v", err)
+	}
+}
+
+func TestInviteUDPPort(t *testing.T) {
+	inv := testInvite()
+	if _, ok := inv.UDPAddr(inv.Addrs[0]); ok {
+		t.Fatal("an invite without a UDP port gave a UDP address")
+	}
+	inv.UDPPort = 7443
+	got, err := ParseInvite(inv.Encode())
+	if err != nil || got.UDPPort != 7443 {
+		t.Fatalf("UDP port did not round trip: %d, %v", got.UDPPort, err)
+	}
+	if addr, ok := got.UDPAddr("[2001:db8::1]:443"); !ok || addr != "[2001:db8::1]:7443" {
+		t.Fatalf("UDPAddr = %q, %v", addr, ok)
+	}
+	inv.UDPPort = 70000
+	if _, err := ParseInvite(inv.Encode()); err == nil {
+		t.Fatal("UDP port 70000 accepted")
 	}
 }
 

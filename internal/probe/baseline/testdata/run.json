@@ -1,0 +1,412 @@
+{
+  "schema": "connverifier.result/v0",
+  "tool": {
+    "name": "connverifier",
+    "version": "v0.0.0-golden",
+    "go": "go1.27.0",
+    "os": "linux",
+    "arch": "amd64"
+  },
+  "run_id": "golden",
+  "started": "2026-01-01T00:00:00Z",
+  "ended": "2026-01-01T00:00:23.1Z",
+  "elapsed_ms": 23100,
+  "checks": [
+    {
+      "id": "udp-baseline",
+      "method_version": 1,
+      "status": "WARN",
+      "path": {
+        "node": "192.0.2.10:7443",
+        "family": "ipv4",
+        "protocol": "udp"
+      },
+      "params": {
+        "duration_ms": 20000,
+        "packet_bytes": 112,
+        "rate_per_s": 50,
+        "reply_wait_ms": 3000
+      },
+      "elapsed_ms": 23100,
+      "metrics": [
+        {
+          "id": "sent",
+          "unit": "count",
+          "value": 1000
+        },
+        {
+          "id": "replies",
+          "unit": "count",
+          "value": 979
+        },
+        {
+          "id": "lost",
+          "unit": "count",
+          "value": 21
+        },
+        {
+          "id": "late",
+          "unit": "count",
+          "value": 1
+        },
+        {
+          "id": "loss",
+          "unit": "%",
+          "value": 2.1,
+          "low": 1.3775739567924288,
+          "high": 3.189029506123753,
+          "samples": 1000
+        },
+        {
+          "id": "lost.forward",
+          "unit": "count",
+          "value": 10
+        },
+        {
+          "id": "lost.return",
+          "unit": "count",
+          "value": 11
+        },
+        {
+          "id": "loss.forward",
+          "unit": "%",
+          "value": 1,
+          "low": 0.544075444552925,
+          "high": 1.8309468870314773,
+          "samples": 1000
+        },
+        {
+          "id": "loss.return",
+          "unit": "%",
+          "value": 1.1111111111111112,
+          "low": 0.6215437399194436,
+          "high": 1.978615328847717,
+          "samples": 990
+        },
+        {
+          "id": "duplicates.forward",
+          "unit": "count",
+          "value": 0
+        },
+        {
+          "id": "duplicates.return",
+          "unit": "count",
+          "value": 1
+        },
+        {
+          "id": "duplication",
+          "unit": "%",
+          "value": 0.10214504596527069,
+          "low": 0.018033384954314325,
+          "high": 0.5763105723817201,
+          "samples": 979
+        },
+        {
+          "id": "reordered",
+          "unit": "count",
+          "value": 1
+        },
+        {
+          "id": "reordered.forward",
+          "unit": "count",
+          "value": 0
+        },
+        {
+          "id": "reordering",
+          "unit": "%",
+          "value": 0.10214504596527069,
+          "low": 0.018033384954314325,
+          "high": 0.5763105723817201,
+          "samples": 979
+        },
+        {
+          "id": "rtt.min",
+          "unit": "ms",
+          "value": 30,
+          "samples": 979
+        },
+        {
+          "id": "rtt.p50",
+          "unit": "ms",
+          "value": 34,
+          "samples": 979
+        },
+        {
+          "id": "rtt.p95",
+          "unit": "ms",
+          "value": 38,
+          "samples": 979
+        },
+        {
+          "id": "rtt.p99",
+          "unit": "ms",
+          "value": 38,
+          "samples": 979
+        },
+        {
+          "id": "rtt.p99_9",
+          "unit": "ms",
+          "samples": 979,
+          "insufficient": true
+        },
+        {
+          "id": "pdv.p50",
+          "unit": "ms",
+          "value": 4,
+          "samples": 979
+        },
+        {
+          "id": "pdv.p95",
+          "unit": "ms",
+          "value": 8,
+          "samples": 979
+        },
+        {
+          "id": "pdv.p99",
+          "unit": "ms",
+          "value": 8,
+          "samples": 979
+        },
+        {
+          "id": "pdv.p99_9",
+          "unit": "ms",
+          "samples": 979,
+          "insufficient": true
+        },
+        {
+          "id": "node_residence.p50",
+          "unit": "ms",
+          "value": 0.04,
+          "samples": 979
+        },
+        {
+          "id": "node_residence.p99",
+          "unit": "ms",
+          "value": 0.04,
+          "samples": 979
+        },
+        {
+          "id": "send_slip.over_10ms",
+          "unit": "count",
+          "value": 0
+        },
+        {
+          "id": "send_errors",
+          "unit": "count",
+          "value": 0
+        }
+      ],
+      "inferences": [
+        {
+          "key": "udp_baseline.inference.loss",
+          "params": {
+            "count": 21,
+            "late": 1
+          },
+          "basis": [
+            "loss",
+            "late"
+          ]
+        },
+        {
+          "key": "udp_baseline.inference.duplicates",
+          "params": {
+            "forward": 0,
+            "return": 1
+          },
+          "basis": [
+            "duplicates.forward",
+            "duplicates.return"
+          ]
+        },
+        {
+          "key": "udp_baseline.inference.reordering",
+          "params": {
+            "count": 1,
+            "forward": 0
+          },
+          "basis": [
+            "reordered",
+            "reordered.forward"
+          ]
+        }
+      ],
+      "not_proven": [
+        {
+          "key": "baseline.not_proven.host_load"
+        },
+        {
+          "key": "udp_baseline.not_proven.return_after_forward_loss",
+          "basis": [
+            "lost.forward",
+            "lost.return"
+          ]
+        }
+      ],
+      "node": {
+        "label": "example",
+        "version": "v0.0.0-golden",
+        "observed_addr": "198.51.100.7:51234",
+        "granted": {
+          "connections": 1,
+          "dial_rate": 1,
+          "duration_s": 36,
+          "idle_timeout_s": 60,
+          "stamp_rate": 100
+        },
+        "load_start": {
+          "sessions": 1,
+          "connections": 0,
+          "max_connections": 20000,
+          "uptime_s": 3600
+        },
+        "load_end": {
+          "sessions": 0,
+          "connections": 0,
+          "max_connections": 20000,
+          "uptime_s": 3624
+        }
+      }
+    },
+    {
+      "id": "tcp-baseline",
+      "method_version": 1,
+      "status": "WARN",
+      "path": {
+        "node": "192.0.2.10:7443",
+        "family": "ipv4",
+        "protocol": "tcp"
+      },
+      "params": {
+        "duration_ms": 20000,
+        "packet_bytes": 11,
+        "rate_per_s": 50,
+        "reply_wait_ms": 3000
+      },
+      "elapsed_ms": 23100,
+      "metrics": [
+        {
+          "id": "sent",
+          "unit": "count",
+          "value": 1000
+        },
+        {
+          "id": "replies",
+          "unit": "count",
+          "value": 979
+        },
+        {
+          "id": "stalls",
+          "unit": "count",
+          "value": 21
+        },
+        {
+          "id": "rtt.min",
+          "unit": "ms",
+          "value": 30,
+          "samples": 979
+        },
+        {
+          "id": "rtt.p50",
+          "unit": "ms",
+          "value": 34,
+          "samples": 979
+        },
+        {
+          "id": "rtt.p95",
+          "unit": "ms",
+          "value": 38,
+          "samples": 979
+        },
+        {
+          "id": "rtt.p99",
+          "unit": "ms",
+          "value": 38,
+          "samples": 979
+        },
+        {
+          "id": "rtt.p99_9",
+          "unit": "ms",
+          "samples": 979,
+          "insufficient": true
+        },
+        {
+          "id": "pdv.p50",
+          "unit": "ms",
+          "value": 4,
+          "samples": 979
+        },
+        {
+          "id": "pdv.p95",
+          "unit": "ms",
+          "value": 8,
+          "samples": 979
+        },
+        {
+          "id": "pdv.p99",
+          "unit": "ms",
+          "value": 8,
+          "samples": 979
+        },
+        {
+          "id": "pdv.p99_9",
+          "unit": "ms",
+          "samples": 979,
+          "insufficient": true
+        },
+        {
+          "id": "send_slip.over_10ms",
+          "unit": "count",
+          "value": 0
+        }
+      ],
+      "inferences": [
+        {
+          "key": "tcp_baseline.inference.stalls",
+          "params": {
+            "count": 21
+          },
+          "basis": [
+            "stalls",
+            "rtt.p99"
+          ]
+        }
+      ],
+      "not_proven": [
+        {
+          "key": "baseline.not_proven.host_load"
+        },
+        {
+          "key": "tcp_baseline.not_proven.node_scheduling",
+          "basis": [
+            "rtt.p50"
+          ]
+        }
+      ],
+      "node": {
+        "label": "example",
+        "version": "v0.0.0-golden",
+        "observed_addr": "198.51.100.7:51234",
+        "granted": {
+          "connections": 1,
+          "dial_rate": 1,
+          "duration_s": 36,
+          "idle_timeout_s": 60,
+          "stamp_rate": 100
+        },
+        "load_start": {
+          "sessions": 1,
+          "connections": 0,
+          "max_connections": 20000,
+          "uptime_s": 3600
+        },
+        "load_end": {
+          "sessions": 0,
+          "connections": 0,
+          "max_connections": 20000,
+          "uptime_s": 3624
+        }
+      }
+    }
+  ]
+}

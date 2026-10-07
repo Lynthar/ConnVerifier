@@ -15,9 +15,9 @@ Reported by the node
   Name: tokyo-test
   Version: v0.0.0-test
   This host's address as the node saw it: 198.51.100.7:51234
-  Granted: 50 connections · 100 new per second · 10.3 min · idle 2 min
-  Load at start: 1 sessions · 0/20000 connections
-  Load at end: 0 sessions · 0/20000 connections
+  Granted: connections 50 · new per second 100 · length 10.3 min · idle 2 min
+  Load at start: sessions 1 · connections 0/20000
+  Load at end: sessions 0 · connections 0/20000
 Observed
   Connections made: 73
   Failed dials: 0

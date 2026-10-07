@@ -17,6 +17,10 @@ how long — each disconnect attributed to a silent timeout, a close, a reset, o
 the node closing it with a stated reason. When the node is full it says so, and
 the result says the node, not your network, set the limit.
 
+`connverifier check` measures the same path's round-trip time and its variation
+over UDP and TCP side by side, and UDP loss — split into the way to the node and
+the way back, without synchronized clocks.
+
 One binary, one dependency (`golang.org/x/term`).
 
 ## Build
@@ -38,7 +42,8 @@ go build -o bin/connverifier ./cmd/connverifier
 ## Usage
 
 On the server, start a node and create an invite for each person who will test
-against it. The node listens on one TCP port (7443 by default) for everything:
+against it. The node listens on one TCP port (7443 by default) for everything,
+and answers UDP probes on the same port number — open both in the firewall:
 
 ```bash
 ulimit -n 20480
@@ -62,7 +67,29 @@ ulimit -n 20480
 ./bin/connverifier capacity -node @alice.invite -clients 1000 -duration 1h -yes
 ```
 
-While it runs, a progress line goes to stderr once a second. When it stops, the
+`check` needs no confirmation: it sends 50 small packets a second over UDP and
+over TCP for 20 seconds (`-rate`, `-duration`). An invite made before UDP probes
+existed has no UDP port; the UDP half then reports `UNSUPPORTED`.
+
+```bash
+./bin/connverifier check -node @alice.invite
+```
+
+```
+UDP round trip and loss: attention (WARN)
+Node: 192.0.2.10:7443 · IPv4 · UDP
+Observed
+  Probes sent: 1000
+  Lost (no reply in time): 21
+  Loss: 2.1% (95% interval 1.38–3.19%, samples: 1000)
+  Lost on the way to the node: 10
+  Lost on the way back: 11
+  Round trip p50: 34 ms (979 samples)
+Inferred
+  - Probes without a reply in time: 21, of which replies that came late: 1.
+```
+
+While `capacity` runs, a progress line goes to stderr once a second. When it stops, the
 result goes to stdout — as text, or as JSON with `-format json`. Shortened:
 
 ```
@@ -70,7 +97,7 @@ TCP long-lived connections: attention (WARN)
 Node: 192.0.2.10:7443 · IPv4 · TCP
 Reported by the node
   Name: tokyo-test
-  Granted: 50 connections · 100 new per second · 10.3 min · idle 2 min
+  Granted: connections 50 · new per second 100 · length 10.3 min · idle 2 min
 Observed
   Connections made: 73
   Drops: 31
@@ -91,20 +118,24 @@ What each status and number means, and when not to trust it, is in
 [docs/methods](docs/methods/README.md); the node protocol is in
 [docs/protocol.md](docs/protocol.md).
 
-Everything is a flag. `capacity`: `-node`, `-clients` (1000), `-start-rate` (100),
+Everything is a flag. `check`: `-node`, `-rate` (50), `-duration` (20s),
+`-dial-timeout` (5s), `-format`, `-lang`. `capacity`: `-node`, `-clients` (1000), `-start-rate` (100),
 `-heartbeat` (30s), `-dial-timeout` (5s), `-io-timeout` (5s), `-min-backoff`
 (500ms), `-max-backoff` (1m), `-duration` (0 = until interrupted), `-log-drops`,
-`-format` (text), `-lang`, `-yes`. `serve`: `-listen` (:7443), `-state-dir`,
-`-max-conns` (20000), `-max-sessions` (64), `-log-connections`. `invite create`:
-`-label`, `-addr` (repeatable), `-max-sessions` (2), `-max-connections` (20000),
-`-max-dial-rate` (1000), `-max-duration` (24h), `-max-idle` (1h).
+`-format` (text), `-lang`, `-yes`. `serve`: `-listen` (:7443), `-listen-udp` (the
+`-listen` address), `-state-dir`, `-max-conns` (20000), `-max-sessions` (64),
+`-log-connections`. `invite create`: `-label`, `-addr` (repeatable),
+`-udp-port` (the first `-addr`'s port), `-max-sessions` (2), `-max-connections`
+(20000), `-max-dial-rate` (1000), `-max-stamp-rate` (100), `-max-duration` (24h),
+`-max-idle` (1h).
 
 Neither side enables TCP keepalive: keepalive probes would refresh the NAT
 mapping and quietly turn every result into "the NAT is fine".
 
 ## Limitations
 
-- **TCP only.** No UDP, no STUN, no DNS, no bandwidth measurement.
+- **Idle path only.** No bandwidth or delay under load, no STUN, no DNS, one UDP
+  packet size; delay is round trip only, never one way.
 - **The JSON schema is `v0`.** It can still change between builds; pin a build
   if you parse it, and don't parse the text.
 - **The exit code doesn't judge your network.** `0` means the run completed,
@@ -135,7 +166,9 @@ soak runs.
   that invite's limits. Send it privately; revoke it with `invite revoke`.
 - **The node only accepts invite holders.** Connections that don't finish TLS or a
   valid ticket within 10 seconds are dropped, and each address may hold only a few
-  of those at once. The node never connects anywhere on a client's behalf.
+  of those at once. The node never connects anywhere on a client's behalf, and
+  answers only UDP probes signed with a live session's key, no larger than they
+  came.
 - **Clients check the node's key.** An invite pins the node's public key; a node
   presenting any other key is refused before the token is sent.
 - **The node sees your public address** — any server you connect to does. Results

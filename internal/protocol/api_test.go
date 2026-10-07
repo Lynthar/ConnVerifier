@@ -62,6 +62,8 @@ func TestSessionResponseValidate(t *testing.T) {
 		"observed without port": func(r *SessionResponse) { r.ObservedAddr = "198.51.100.7" },
 		"granted zero duration": func(r *SessionResponse) { r.Granted.DurationS = 0 },
 		"negative load":         func(r *SessionResponse) { r.Node.Load.Sessions = -1 },
+		"zero ssid":             func(r *SessionResponse) { r.Stamp = &StampGrant{} },
+		"stamp rate too high":   func(r *SessionResponse) { r.Granted.StampRate = MaxStampRate + 1 },
 	}
 	for name, mutate := range mutations {
 		t.Run(name, func(t *testing.T) {

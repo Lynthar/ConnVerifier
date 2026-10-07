@@ -7,6 +7,7 @@ import (
 
 	"github.com/Lynthar/ConnVerifier/internal/protocol"
 	"github.com/Lynthar/ConnVerifier/internal/result"
+	"github.com/Lynthar/ConnVerifier/internal/stats"
 )
 
 // runInfo is what the session added to the counters: what the node granted, and
@@ -14,28 +15,6 @@ import (
 type runInfo struct {
 	granted protocol.Limits
 	nodeCut bool
-}
-
-// sessionFailed records a run that never got a session: there is no measurement,
-// so the status is ERROR, and the message names the cause.
-func sessionFailed(c *result.Check, e *sessionError) {
-	c.Status = result.Error
-	var m result.Message
-	switch e.kind {
-	case "identity":
-		m.Key = "tcp_capacity.error.node_identity"
-		m.Params = map[string]any{"addr": c.Path.Node}
-	case "unreachable":
-		m.Key = "tcp_capacity.error.node_unreachable"
-		m.Params = map[string]any{"error": fmt.Sprint(e.err)}
-	case "busy":
-		m.Key = "tcp_capacity.error.node_busy"
-		m.Params = map[string]any{"reason": e.refusal.Reason, "message": e.refusal.Message, "retry_after_ms": e.refusal.RetryAfterS * 1000}
-	default:
-		m.Key = "tcp_capacity.error.session_refused"
-		m.Params = map[string]any{"reason": e.refusal.Reason, "message": e.refusal.Message}
-	}
-	c.Error = &m
 }
 
 // idleTooShort records a session whose granted idle period ends before a
@@ -89,7 +68,7 @@ func finishCheck(c *result.Check, cfg Config, f finalStats, h *rttHistogram, ri 
 // samples × (100−p) ≥ 100; with fewer it is marked insufficient and has no value.
 func quantileMetric(h *rttHistogram, counts []uint64, total uint64, p int) result.Metric {
 	id := fmt.Sprintf("echo_rtt.p%d", p)
-	if total*uint64(100-p) < 100 {
+	if !stats.Sufficient(total, p*10) {
 		return result.Metric{ID: id, Unit: result.UnitMs, Samples: total, Insufficient: true}
 	}
 	return result.Millis(id, h.quantile(counts, total, float64(p)/100), total)

@@ -24,17 +24,19 @@ const (
 // It is a credential: never put it in results, logs or shared reports — use
 // Label. String and GoString print only the label, so %v and %#v cannot leak it.
 type Invite struct {
-	Label string
-	Addrs []string
-	Pin   [32]byte
-	Token [32]byte
+	Label   string
+	Addrs   []string
+	Pin     [32]byte
+	Token   [32]byte
+	UDPPort int // STAMP port on the same hosts as Addrs; 0 when the node offers none
 }
 
 type inviteJSON struct {
-	Label string   `json:"l"`
-	Addrs []string `json:"a"`
-	Pin   string   `json:"p"`
-	Token string   `json:"t"`
+	Label   string   `json:"l"`
+	Addrs   []string `json:"a"`
+	Pin     string   `json:"p"`
+	Token   string   `json:"t"`
+	UDPPort int      `json:"u,omitempty"`
 }
 
 func (inv Invite) String() string   { return "invite " + strconv.Quote(inv.Label) }
@@ -43,10 +45,11 @@ func (inv Invite) GoString() string { return inv.String() }
 // Encode returns the invite string to hand to a user.
 func (inv Invite) Encode() string {
 	data, _ := json.Marshal(inviteJSON{
-		Label: inv.Label,
-		Addrs: inv.Addrs,
-		Pin:   base64.RawURLEncoding.EncodeToString(inv.Pin[:]),
-		Token: base64.RawURLEncoding.EncodeToString(inv.Token[:]),
+		Label:   inv.Label,
+		Addrs:   inv.Addrs,
+		Pin:     base64.RawURLEncoding.EncodeToString(inv.Pin[:]),
+		Token:   base64.RawURLEncoding.EncodeToString(inv.Token[:]),
+		UDPPort: inv.UDPPort,
 	})
 	return invitePrefix + base64.RawURLEncoding.EncodeToString(data)
 }
@@ -71,7 +74,7 @@ func ParseInvite(s string) (Invite, error) {
 	if err := json.Unmarshal(data, &j); err != nil {
 		return Invite{}, fmt.Errorf("invite: %w", err)
 	}
-	inv := Invite{Label: j.Label, Addrs: j.Addrs}
+	inv := Invite{Label: j.Label, Addrs: j.Addrs, UDPPort: j.UDPPort}
 	if err := decodeFixed(j.Pin, inv.Pin[:]); err != nil {
 		return Invite{}, fmt.Errorf("invite pin: %w", err)
 	}
@@ -97,7 +100,20 @@ func (inv Invite) Validate() error {
 			return err
 		}
 	}
+	if inv.UDPPort < 0 || inv.UDPPort > 65535 {
+		return fmt.Errorf("invite UDP port must be 1 to 65535")
+	}
 	return nil
+}
+
+// UDPAddr is the STAMP address on the host of tcpAddr, one of inv.Addrs; ok is
+// false when the invite names no UDP port.
+func (inv Invite) UDPAddr(tcpAddr string) (addr string, ok bool) {
+	host, _, err := net.SplitHostPort(tcpAddr)
+	if err != nil || inv.UDPPort == 0 {
+		return "", false
+	}
+	return net.JoinHostPort(host, strconv.Itoa(inv.UDPPort)), true
 }
 
 // ValidateLabel accepts 1 to 64 bytes of printable UTF-8.

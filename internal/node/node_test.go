@@ -11,10 +11,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
+	"github.com/Lynthar/ConnVerifier/internal/memnet"
 	"github.com/Lynthar/ConnVerifier/internal/protocol"
 )
 
@@ -27,7 +27,7 @@ func stateDir(t *testing.T) string {
 func testServer(t *testing.T, maxConns int) (*server, protocol.Invite) {
 	t.Helper()
 	dir := stateDir(t)
-	inv, err := CreateInvite(dir, "test", []string{"192.0.2.10:7443"}, DefaultInviteLimits)
+	inv, err := CreateInvite(dir, "test", []string{"192.0.2.10:7443"}, 0, DefaultInviteLimits)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func testServer(t *testing.T, maxConns int) (*server, protocol.Invite) {
 		t.Fatal(err)
 	}
 	cfg := Config{listen: ":0", stateDir: dir, maxConns: maxConns, maxSessions: 4}
-	return newServer(cfg, "vtest", cert), inv
+	return newServer(cfg, "vtest", cert, false), inv
 }
 
 func want(conns int) protocol.Limits {
@@ -65,7 +65,7 @@ func TestValidateConfig(t *testing.T) {
 
 func TestInviteLifecycle(t *testing.T) {
 	dir := stateDir(t)
-	inv, err := CreateInvite(dir, "alice", []string{"192.0.2.10:7443"}, DefaultInviteLimits)
+	inv, err := CreateInvite(dir, "alice", []string{"192.0.2.10:7443"}, 0, DefaultInviteLimits)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestInviteLifecycle(t *testing.T) {
 	if parsed.Pin != protocol.Pin(cert.Leaf) {
 		t.Fatal("invite pin does not match the node key")
 	}
-	if _, err := CreateInvite(dir, "alice", []string{"192.0.2.10:7443"}, DefaultInviteLimits); err == nil {
+	if _, err := CreateInvite(dir, "alice", []string{"192.0.2.10:7443"}, 0, DefaultInviteLimits); err == nil {
 		t.Fatal("duplicate label accepted")
 	}
 	data, err := os.ReadFile(filepath.Join(dir, invitesFile))
@@ -106,7 +106,7 @@ func TestStateRefusesFilesOthersCanRead(t *testing.T) {
 		t.Skip("no permission bits on Windows")
 	}
 	dir := stateDir(t)
-	if _, err := CreateInvite(dir, "a", []string{"192.0.2.10:7443"}, DefaultInviteLimits); err != nil {
+	if _, err := CreateInvite(dir, "a", []string{"192.0.2.10:7443"}, 0, DefaultInviteLimits); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(filepath.Join(dir, invitesFile), 0o644); err != nil {
@@ -288,43 +288,14 @@ func TestDataPlaneRejectsWithReason(t *testing.T) {
 	}
 }
 
-// chanListener hands out connections pushed into conns, so the accept loop can be
-// driven without a socket. Every net.Pipe end has the same (unparseable) address.
-type chanListener struct {
-	conns chan net.Conn
-	done  chan struct{}
-	once  sync.Once
-}
-
-func newChanListener() *chanListener {
-	return &chanListener{conns: make(chan net.Conn), done: make(chan struct{})}
-}
-
-func (l *chanListener) Accept() (net.Conn, error) {
-	select {
-	case c := <-l.conns:
-		return c, nil
-	case <-l.done:
-		return nil, net.ErrClosed
-	}
-}
-
-func (l *chanListener) Close() error {
-	l.once.Do(func() { close(l.done) })
-	return nil
-}
-
-func (l *chanListener) Addr() net.Addr { return &net.TCPAddr{} }
-
 func TestServeRoutesByFirstByte(t *testing.T) {
 	s, inv := testServer(t, 10)
 	ctx, cancel := context.WithCancel(context.Background())
-	ln := newChanListener()
+	ln := memnet.NewListener()
 	stopped := make(chan struct{})
-	go func() { s.serve(ctx, ln); close(stopped) }()
+	go func() { s.serve(ctx, ln, nil); close(stopped) }()
 	dial := func() net.Conn {
-		c, srv := net.Pipe()
-		ln.conns <- srv
+		c, _ := ln.Dial(ctx, "", "")
 		c.SetDeadline(time.Now().Add(5 * time.Second))
 		return c
 	}
@@ -361,17 +332,15 @@ func TestServeCapsUnprovenConnectionsPerAddress(t *testing.T) {
 	s, _ := testServer(t, 10)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ln := newChanListener()
-	go s.serve(ctx, ln)
+	ln := memnet.NewListener()
+	go s.serve(ctx, ln, nil)
 
 	var held []net.Conn
 	for range maxPendingPerIP {
-		c, srv := net.Pipe()
-		ln.conns <- srv
+		c, _ := ln.Dial(ctx, "", "")
 		held = append(held, c)
 	}
-	over, srv := net.Pipe()
-	ln.conns <- srv
+	over, _ := ln.Dial(ctx, "", "")
 	over.SetDeadline(time.Now().Add(5 * time.Second))
 	if n, err := over.Read(make([]byte, 1)); err != io.EOF || n != 0 {
 		t.Fatalf("connection over the per-address limit read %d, %v; want closed", n, err)
@@ -411,7 +380,7 @@ func TestCreateAndEndSession(t *testing.T) {
 		t.Fatalf("response %+v", resp)
 	}
 
-	other, err := CreateInvite(s.cfg.stateDir, "other", []string{"192.0.2.10:7443"}, DefaultInviteLimits)
+	other, err := CreateInvite(s.cfg.stateDir, "other", []string{"192.0.2.10:7443"}, 0, DefaultInviteLimits)
 	if err != nil {
 		t.Fatal(err)
 	}

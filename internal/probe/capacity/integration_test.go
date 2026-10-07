@@ -45,7 +45,7 @@ func TestLoopbackRunReleasesEverything(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(t.TempDir(), "node")
-	inv, err := node.CreateInvite(dir, "loopback", []string{ln.Addr().String()}, node.DefaultInviteLimits)
+	inv, err := node.CreateInvite(dir, "loopback", []string{ln.Addr().String()}, 0, node.DefaultInviteLimits)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestLoopbackRunReleasesEverything(t *testing.T) {
 	ncfg.RegisterFlags(fs)
 	fs.Parse([]string{"-state-dir", dir})
 	stopped := make(chan struct{})
-	go func() { node.ServeOn(ctx, ln, ncfg, "vtest"); close(stopped) }()
+	go func() { node.ServeOn(ctx, ln, nil, ncfg, "vtest"); close(stopped) }()
 
 	cfg := validClientConfig()
 	cfg.node = inv.Encode()

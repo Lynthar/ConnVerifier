@@ -34,6 +34,7 @@ const (
 
 type Config struct {
 	listen         string
+	listenUDP      string // "" means the same address as listen
 	stateDir       string
 	maxConns       int
 	maxSessions    int
@@ -43,6 +44,7 @@ type Config struct {
 // RegisterFlags binds cfg to fs under the command-line names and defaults.
 func (cfg *Config) RegisterFlags(fs *flag.FlagSet) {
 	fs.StringVar(&cfg.listen, "listen", ":7443", "TCP address to listen on (control plane and data plane share it)")
+	fs.StringVar(&cfg.listenUDP, "listen-udp", "", "UDP address for STAMP (default: the -listen address)")
 	fs.StringVar(&cfg.stateDir, "state-dir", DefaultStateDir(), "directory holding the node key and invites")
 	fs.IntVar(&cfg.maxConns, "max-conns", 20000, "live data-plane connections across all sessions")
 	fs.IntVar(&cfg.maxSessions, "max-sessions", 64, "sessions across all invites")
@@ -77,10 +79,11 @@ type server struct {
 	httpConns *pending
 	requests  *requestLimiter
 	stats     counters
+	udp       bool // a STAMP reflector is running
 	wg        sync.WaitGroup
 }
 
-// Serve listens on the configured address and runs the node until ctx ends.
+// Serve listens on the configured addresses and runs the node until ctx ends.
 // version is reported to clients.
 func Serve(ctx context.Context, cfg Config, version string) error {
 	if err := cfg.Validate(); err != nil {
@@ -90,29 +93,49 @@ func Serve(ctx context.Context, cfg Config, version string) error {
 	if err != nil {
 		return fmt.Errorf("listen failed: %w", err)
 	}
-	return ServeOn(ctx, ln, cfg, version)
-}
-
-// ServeOn runs the node on ln until ctx ends, then closes ln. The caller must
-// have created ln through netx, or accepted connections may carry keepalive.
-func ServeOn(ctx context.Context, ln net.Listener, cfg Config, version string) error {
-	cert, err := LoadIdentity(cfg.stateDir)
+	udp := cfg.listenUDP
+	if udp == "" {
+		udp = cfg.listen
+	}
+	pc, err := netx.ListenPacket(ctx, udp)
 	if err != nil {
 		ln.Close()
+		return fmt.Errorf("listen failed: %w", err)
+	}
+	return ServeOn(ctx, ln, pc, cfg, version)
+}
+
+// ServeOn runs the node on ln, and its STAMP reflector on pc unless pc is nil,
+// until ctx ends, then closes both. The caller must have created ln through netx,
+// or accepted connections may carry keepalive.
+func ServeOn(ctx context.Context, ln net.Listener, pc net.PacketConn, cfg Config, version string) error {
+	closeAll := func() {
+		ln.Close()
+		if pc != nil {
+			pc.Close()
+		}
+	}
+	cert, err := LoadIdentity(cfg.stateDir)
+	if err != nil {
+		closeAll()
 		return err
 	}
 	if _, err := loadInvites(cfg.stateDir); err != nil {
-		ln.Close()
+		closeAll()
 		return err
 	}
 	pin := protocol.Pin(cert.Leaf)
-	log.Printf("node listening on %s key=%s max_conns=%d max_sessions=%d state=%s",
-		ln.Addr(), protocol.EncodeID(pin[:]), cfg.maxConns, cfg.maxSessions, cfg.stateDir)
-	newServer(cfg, version, cert).serve(ctx, ln)
+	udp := "off"
+	if pc != nil {
+		udp = pc.LocalAddr().String()
+	}
+	log.Printf("node listening on %s udp=%s key=%s max_conns=%d max_sessions=%d state=%s",
+		ln.Addr(), udp, protocol.EncodeID(pin[:]), cfg.maxConns, cfg.maxSessions, cfg.stateDir)
+	newServer(cfg, version, cert, pc != nil).serve(ctx, ln, pc)
 	return nil
 }
 
-func newServer(cfg Config, version string, cert tls.Certificate) *server {
+func newServer(cfg Config, version string, cert tls.Certificate, udp bool) *server {
 	now := time.Now()
 	return &server{
 		cfg:       cfg,
@@ -122,12 +145,13 @@ func newServer(cfg Config, version string, cert tls.Certificate) *server {
 		pending:   newPending(maxPendingPerIP, maxPendingTotal),
 		httpConns: newPending(maxHTTPPerIP, maxHTTPTotal),
 		requests:  newRequestLimiter(requestRate),
+		udp:       udp,
 	}
 }
 
 // serve accepts on ln until ctx ends, then closes every connection with a reason
 // and waits for its goroutines.
-func (s *server) serve(ctx context.Context, ln net.Listener) {
+func (s *server) serve(ctx context.Context, ln net.Listener, pc net.PacketConn) {
 	httpLn := newConnListener(ln.Addr())
 	hs := &http.Server{
 		Handler:           s.routes(),
@@ -147,6 +171,11 @@ func (s *server) serve(ctx context.Context, ln net.Listener) {
 	go func() { defer s.wg.Done(); s.expireLoop(ctx) }()
 	go func() { defer s.wg.Done(); s.statsLoop(ctx) }()
 	go func() { <-ctx.Done(); ln.Close() }()
+	if pc != nil {
+		s.wg.Add(1)
+		go func() { defer s.wg.Done(); s.reflect(ctx, pc) }()
+		go func() { <-ctx.Done(); pc.Close() }()
+	}
 
 	for {
 		conn, err := ln.Accept()

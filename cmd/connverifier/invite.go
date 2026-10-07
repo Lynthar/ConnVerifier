@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,6 +38,7 @@ func runInvite(args []string) {
 		addrs                 addrList
 		lim                   = node.DefaultInviteLimits
 		maxDuration, maxIdle  time.Duration
+		udpPort               int
 	)
 	register := func(fs *flag.FlagSet) {
 		fs.StringVar(&stateDir, "state-dir", node.DefaultStateDir(), "node state directory")
@@ -51,6 +53,8 @@ func runInvite(args []string) {
 			fs.IntVar(&lim.MaxDialRate, "max-dial-rate", lim.MaxDialRate, "new connections per second per session")
 			fs.DurationVar(&maxDuration, "max-duration", time.Duration(lim.MaxDurationS)*time.Second, "longest session")
 			fs.DurationVar(&maxIdle, "max-idle", time.Duration(lim.MaxIdleTimeoutS)*time.Second, "longest idle period a session may ask for")
+			fs.IntVar(&lim.MaxStampRate, "max-stamp-rate", lim.MaxStampRate, "STAMP packets per second per session (0: no UDP checks)")
+			fs.IntVar(&udpPort, "udp-port", 0, "UDP port of the node's STAMP reflector (default: the first -addr's port)")
 		}
 	}
 	switch sub {
@@ -73,7 +77,15 @@ func runInvite(args []string) {
 		}
 		lim.MaxDurationS = int(maxDuration / time.Second)
 		lim.MaxIdleTimeoutS = int(maxIdle / time.Second)
-		inv, err := node.CreateInvite(stateDir, label, addrs, lim)
+		if udpPort == 0 && lim.MaxStampRate > 0 {
+			_, port, err := net.SplitHostPort(addrs[0])
+			invalidIf(err)
+			udpPort, _ = strconv.Atoi(port)
+		}
+		if lim.MaxStampRate == 0 {
+			udpPort = 0
+		}
+		inv, err := node.CreateInvite(stateDir, label, addrs, udpPort, lim)
 		invalidIf(err)
 		fmt.Println(inv.Encode())
 		fmt.Fprintln(os.Stderr, cat.Text("invite.created_note", map[string]any{"label": label}))

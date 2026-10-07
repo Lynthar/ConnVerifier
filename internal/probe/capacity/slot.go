@@ -14,10 +14,9 @@ import (
 
 	"github.com/Lynthar/ConnVerifier/internal/netenv"
 	"github.com/Lynthar/ConnVerifier/internal/netx"
+	"github.com/Lynthar/ConnVerifier/internal/probe/nodeclient"
 	"github.com/Lynthar/ConnVerifier/internal/protocol"
 )
-
-type dialFunc func(ctx context.Context, network, address string) (net.Conn, error)
 
 // pool is everything the slots share for one run against one granted session.
 type pool struct {
@@ -27,7 +26,7 @@ type pool struct {
 	secret    []byte
 	target    int
 	rate      int
-	dial      dialFunc
+	dial      nodeclient.DialFunc
 	limiter   *RateLimiter
 	dialLog   *dialLogger
 	stats     *Stats

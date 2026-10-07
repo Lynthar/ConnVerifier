@@ -1,7 +1,8 @@
 # Node protocol, version 2
 
-A node serves clients on **one TCP port**. The first byte a client sends decides
-what the connection is:
+A node serves clients on **one TCP port**, and answers STAMP on a UDP port — by
+default the same number. The first byte a client sends on TCP decides what the
+connection is:
 
 | First byte | Connection |
 |---|---|
@@ -23,7 +24,7 @@ its invite; CA chains and host names are not used.
 
 ```text
 cvi1_<base64url without padding of the JSON below>
-{"l": "<label>", "a": ["<host:port>", …], "p": "<pin>", "t": "<token>"}
+{"l": "<label>", "a": ["<host:port>", …], "p": "<pin>", "t": "<token>", "u": <port>}
 ```
 
 | Field | Content |
@@ -32,6 +33,7 @@ cvi1_<base64url without padding of the JSON below>
 | `a` | 1–4 addresses, `host:port`, host an IP literal or a DNS name |
 | `p` | Pin, 32 bytes, base64url |
 | `t` | Access token, 32 random bytes, base64url |
+| `u` | Optional. UDP port of the node's STAMP reflector, on the hosts of `a`; absent when the node offers none |
 
 An invite is at most 2048 characters. Unknown JSON fields are ignored. The node
 stores only the SHA-256 of each token, with the invite's label and limits.
@@ -50,6 +52,10 @@ Every request carries `Authorization: Bearer <token>`. Bodies are JSON of at mos
   "want": {"connections": 10000, "dial_rate": 500, "duration_s": 3600, "idle_timeout_s": 120}
 }
 ```
+
+`check` is `tcp-capacity` or `baseline`. A `baseline` session may also ask for
+`stamp_rate`, STAMP packets per second; a node without a reflector, or a
+`tcp-capacity` session, is granted none.
 
 `duration_s` 0 asks for as long as the invite allows. The node grants each value
 up to the invite's limit: `connections`, `dial_rate` and `idle_timeout_s` are the
@@ -70,13 +76,19 @@ the allowed maximum when 0 was asked.
 ```
 
 `observed_addr` is the client's address as the node saw it on this request, or
-empty when unknown. Connection limits are on **live** connections, not on how many
-a session opens over its lifetime.
+empty when unknown. A session granted a STAMP rate also carries
+`"stamp": {"ssid": N}`, its non-zero STAMP session-sender identifier. Connection
+limits are on **live** connections, not on how many a session opens over its
+lifetime.
 
 ### `DELETE /v2/sessions/{session_id}`
 
 Ends a session created with the same token. Its data-plane connections receive
-`CLOSE(session_ended)`. `200 OK` returns `{"node": {…}}` with the load afterwards.
+`CLOSE(session_ended)`. `200 OK` returns `{"node": {…}}` with the load afterwards,
+and for a session that had a STAMP grant,
+`"stamp": {"received": N, "over_rate": N, "other_addr": N}`: the authenticated
+packets the reflector answered, and those it dropped for exceeding the granted
+rate or for coming from another source address.
 
 ### Refusals
 
@@ -133,6 +145,36 @@ A client must not count a REJECT or a CLOSE as a network failure: the node said
 why. The node sends nothing before the HELLO and nothing unprompted afterwards
 except CLOSE and PROBE.
 
+## STAMP (UDP)
+
+The node is a stateful STAMP reflector (RFC 8762) in authenticated mode with the
+session-sender identifier of RFC 8972. Sender and reflector packets are both 112
+bytes and carry no TLVs:
+
+| Offset | Size | Sender packet | Reflector packet |
+|---|---|---|---|
+| 0 | 4 | Sequence number, from 0 | The reflector's own sequence number, from 0 per session |
+| 16 | 8 | Timestamp T1 | Timestamp T3, just before sending |
+| 24 | 2 | Error estimate | Error estimate |
+| 26 | 2 | SSID | SSID |
+| 32 | 8 | — | Receive timestamp T2 |
+| 48 | 4 | — | The sender's sequence number |
+| 64 | 8 | — | The sender's timestamp |
+| 72 | 2 | — | The sender's error estimate |
+| 80 | 1 | — | The sender's TTL, `0` (not read) |
+| 96 | 16 | HMAC | HMAC |
+
+All other bytes are zero. Timestamps are NTPv4 64-bit; the error estimate is
+unsynchronized, NTP format, one second. The HMAC is HMAC-SHA-256 over bytes 0–95,
+truncated to 16 bytes, keyed with HKDF-SHA256 of the session secret with info
+`connverifier stamp v1` (32 bytes).
+
+The reflector answers a packet only when its SSID names a live session, its HMAC
+verifies, it comes from the source address of that session's first authenticated
+packet, and it fits the granted rate (a token bucket holding one second's worth).
+Everything else is dropped without an answer. The reply has the length of the
+request.
+
 ## Limits
 
 | Limit | Default | Set by |
@@ -144,6 +186,7 @@ except CLOSE and PROBE.
 | New connections per second per session | 1 000 | `invite create -max-dial-rate` |
 | Session length | 24 h | `invite create -max-duration` |
 | Idle period a session may ask for | 1 h | `invite create -max-idle` |
+| STAMP packets per second per session | 100 | `invite create -max-stamp-rate` |
 | Connections not yet past TLS or HELLO | 32 per address, 1 024 in total | fixed |
 | Open control-plane connections | 8 per address, 512 in total | fixed |
 | Control-plane requests | 10 per second per address | fixed |

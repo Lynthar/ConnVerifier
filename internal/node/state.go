@@ -41,12 +41,13 @@ type InviteLimits struct {
 	MaxDialRate     int `json:"max_dial_rate"`
 	MaxDurationS    int `json:"max_duration_s"`
 	MaxIdleTimeoutS int `json:"max_idle_timeout_s"`
+	MaxStampRate    int `json:"max_stamp_rate"` // 0: no STAMP, as for invites made before it existed
 }
 
 // DefaultInviteLimits are the per-invite caps when invite create is not told others.
 var DefaultInviteLimits = InviteLimits{
 	MaxSessions: 2, MaxConnections: 20000, MaxDialRate: 1000,
-	MaxDurationS: 24 * 3600, MaxIdleTimeoutS: 3600,
+	MaxDurationS: 24 * 3600, MaxIdleTimeoutS: 3600, MaxStampRate: 100,
 }
 
 func (l InviteLimits) Validate() error {
@@ -61,6 +62,8 @@ func (l InviteLimits) Validate() error {
 		return fmt.Errorf("max duration must be 1s to %ds", protocol.MaxDurationS)
 	case l.MaxIdleTimeoutS < 1 || l.MaxIdleTimeoutS > protocol.MaxIdleTimeoutS:
 		return fmt.Errorf("max idle timeout must be 1s to %ds", protocol.MaxIdleTimeoutS)
+	case l.MaxStampRate < 0 || l.MaxStampRate > protocol.MaxStampRate:
+		return fmt.Errorf("max STAMP rate must be 0 to %d", protocol.MaxStampRate)
 	}
 	return nil
 }
@@ -206,7 +209,7 @@ func saveInvites(dir string, invites []InviteRecord) error {
 
 // CreateInvite adds an invite under label and returns the invite string's
 // contents. The token exists only in the returned value; the node keeps its hash.
-func CreateInvite(dir, label string, addrs []string, limits InviteLimits) (protocol.Invite, error) {
+func CreateInvite(dir, label string, addrs []string, udpPort int, limits InviteLimits) (protocol.Invite, error) {
 	if err := limits.Validate(); err != nil {
 		return protocol.Invite{}, err
 	}
@@ -214,7 +217,7 @@ func CreateInvite(dir, label string, addrs []string, limits InviteLimits) (proto
 	if err != nil {
 		return protocol.Invite{}, err
 	}
-	inv := protocol.Invite{Label: label, Addrs: addrs, Pin: protocol.Pin(cert.Leaf)}
+	inv := protocol.Invite{Label: label, Addrs: addrs, Pin: protocol.Pin(cert.Leaf), UDPPort: udpPort}
 	if _, err := rand.Read(inv.Token[:]); err != nil {
 		return protocol.Invite{}, err
 	}

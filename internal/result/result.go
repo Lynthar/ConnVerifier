@@ -3,7 +3,11 @@
 // every output format reads the same facts.
 package result
 
-import "time"
+import (
+	"time"
+
+	"github.com/Lynthar/ConnVerifier/internal/stats"
+)
 
 // Schema names the JSON layout; v0 makes no compatibility promise between builds.
 const Schema = "connverifier.result/v0"
@@ -24,8 +28,9 @@ const (
 
 // Unit values used by Metric.
 const (
-	UnitCount = "count"
-	UnitMs    = "ms"
+	UnitCount   = "count"
+	UnitMs      = "ms"
+	UnitPercent = "%"
 )
 
 type Run struct {
@@ -79,6 +84,7 @@ type Grant struct {
 	DialRate     int `json:"dial_rate"`
 	DurationS    int `json:"duration_s"`
 	IdleTimeoutS int `json:"idle_timeout_s"`
+	StampRate    int `json:"stamp_rate,omitempty"`
 }
 
 type NodeLoad struct {
@@ -95,11 +101,14 @@ type Path struct {
 }
 
 // Metric is one observed value. An Insufficient metric has too few samples for its
-// statistic and carries no Value, so it can never be read as zero.
+// statistic and carries no Value, so it can never be read as zero. Low and High,
+// when present, bound a 95% interval around Value.
 type Metric struct {
 	ID           string   `json:"id"`
 	Unit         string   `json:"unit"`
 	Value        *float64 `json:"value,omitempty"`
+	Low          *float64 `json:"low,omitempty"`
+	High         *float64 `json:"high,omitempty"`
 	Samples      uint64   `json:"samples,omitempty"`
 	Insufficient bool     `json:"insufficient,omitempty"`
 }
@@ -122,6 +131,17 @@ func Count(id string, n uint64) Metric {
 func Millis(id string, d time.Duration, samples uint64) Metric {
 	v := float64(d.Microseconds()) / 1000
 	return Metric{ID: id, Unit: UnitMs, Value: &v, Samples: samples}
+}
+
+// Ratio returns k of n as a percentage with its 95% Wilson interval; with n = 0
+// it is insufficient.
+func Ratio(id string, k, n uint64) Metric {
+	if n == 0 {
+		return Metric{ID: id, Unit: UnitPercent, Insufficient: true}
+	}
+	lo, hi := stats.Wilson(k, n)
+	v, l, h := 100*float64(k)/float64(n), 100*lo, 100*hi
+	return Metric{ID: id, Unit: UnitPercent, Value: &v, Low: &l, High: &h, Samples: n}
 }
 
 // ExitCode is 1 when any check ended in ERROR and 0 otherwise: the exit status

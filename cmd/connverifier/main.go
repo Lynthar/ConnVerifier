@@ -18,6 +18,7 @@ import (
 
 	"github.com/Lynthar/ConnVerifier/internal/i18n"
 	"github.com/Lynthar/ConnVerifier/internal/node"
+	"github.com/Lynthar/ConnVerifier/internal/probe/baseline"
 	"github.com/Lynthar/ConnVerifier/internal/probe/capacity"
 	"github.com/Lynthar/ConnVerifier/internal/report"
 	"github.com/Lynthar/ConnVerifier/internal/result"
@@ -28,6 +29,7 @@ import (
 const usage = `usage: connverifier <command> [flags]
 
 commands:
+  check      measure UDP and TCP round trip, its variation and UDP loss to a node
   capacity   hold N long-lived TCP connections against a node and report drops
   serve      run a node that clients measure against
   invite     create, list or revoke the invites a node accepts
@@ -51,6 +53,26 @@ func main() {
 	defer stop()
 
 	switch cmd {
+	case "check":
+		var cfg baseline.Config
+		var out output
+		parse(cmd, args, func(fs *flag.FlagSet) {
+			cfg.RegisterFlags(fs)
+			out.register(fs)
+		})
+		invalidIf(cfg.Validate())
+		invalidIf(out.resolve())
+		started := time.Now()
+		checks, err := baseline.Run(ctx, cfg, buildVersion())
+		if err != nil {
+			log.Fatal(err)
+		}
+		run := newRun(started, time.Now(), checks...)
+		if err := out.write(os.Stdout, run); err != nil {
+			log.Fatal(err)
+		}
+		stop()
+		os.Exit(run.ExitCode())
 	case "capacity":
 		var cfg capacity.Config
 		var out output

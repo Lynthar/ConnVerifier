@@ -120,9 +120,13 @@ func writeNode(b *strings.Builder, field func(indent, label, value string), n *r
 		field("  ", cat.Text("node.observed_addr", nil), n.ObservedAddr)
 	}
 	if g := n.Granted; g != nil {
+		stamp := ""
+		if g.StampRate > 0 {
+			stamp = cat.Text("node.grant_stamp", map[string]any{"rate": g.StampRate})
+		}
 		field("  ", cat.Text("node.granted", nil), Message(cat, result.Message{Key: "node.grant_value", Params: map[string]any{
 			"connections": g.Connections, "rate": g.DialRate,
-			"duration_ms": g.DurationS * 1000, "idle_ms": g.IdleTimeoutS * 1000,
+			"duration_ms": g.DurationS * 1000, "idle_ms": g.IdleTimeoutS * 1000, "stamp": stamp,
 		}}))
 	}
 	for _, l := range []struct {
@@ -175,6 +179,11 @@ func metricText(cat *i18n.Catalog, m result.Metric) string {
 	switch m.Unit {
 	case result.UnitMs:
 		v = formatMs(*m.Value)
+	case result.UnitPercent:
+		v = sig3(*m.Value) + "%"
+		if m.Low != nil && m.High != nil {
+			return cat.Text("value.with_interval", map[string]any{"value": v, "low": sig3(*m.Low), "high": sig3(*m.High) + "%", "samples": m.Samples})
+		}
 	default:
 		v = strconv.FormatFloat(*m.Value, 'f', -1, 64)
 	}

@@ -17,6 +17,12 @@ const PathSessions = "/v2/sessions"
 // MaxBody bounds every control-plane request and response body.
 const MaxBody = 4096
 
+// Checks a session can be opened for.
+const (
+	CheckTCPCapacity = "tcp-capacity"
+	CheckBaseline    = "baseline" // udp-baseline and tcp-baseline, side by side
+)
+
 // Error reasons in an ErrorResponse.
 const (
 	ErrReasonBadRequest = "bad_request"
@@ -32,6 +38,7 @@ const (
 	MaxDialRate     = 100_000
 	MaxDurationS    = 7 * 24 * 3600
 	MaxIdleTimeoutS = 24 * 3600
+	MaxStampRate    = 10_000
 )
 
 const (
@@ -41,11 +48,13 @@ const (
 
 // Limits are what a session asks for (want) or is allowed (granted). In a request
 // DurationS 0 means "as long as the node allows"; granted values are never 0.
+// StampRate is STAMP packets per second, 0 when the session sends none.
 type Limits struct {
 	Connections  int `json:"connections"`
 	DialRate     int `json:"dial_rate"`
 	DurationS    int `json:"duration_s"`
 	IdleTimeoutS int `json:"idle_timeout_s"`
+	StampRate    int `json:"stamp_rate,omitempty"`
 }
 
 func (l Limits) validate(granted bool) error {
@@ -62,6 +71,8 @@ func (l Limits) validate(granted bool) error {
 		return fmt.Errorf("duration_s must be %d to %d", minDuration, MaxDurationS)
 	case l.IdleTimeoutS < 1 || l.IdleTimeoutS > MaxIdleTimeoutS:
 		return fmt.Errorf("idle_timeout_s must be 1 to %d", MaxIdleTimeoutS)
+	case l.StampRate < 0 || l.StampRate > MaxStampRate:
+		return fmt.Errorf("stamp_rate must be 0 to %d", MaxStampRate)
 	}
 	return nil
 }
@@ -111,12 +122,27 @@ func (n NodeInfo) validate() error {
 // SessionResponse grants a session. ObservedAddr is the client's address as the node
 // saw it on the control connection, empty if unknown; sensitive, for local results only.
 type SessionResponse struct {
-	SessionID    string    `json:"session_id"`
-	Secret       string    `json:"secret"`
-	ExpiresAt    time.Time `json:"expires_at"`
-	ObservedAddr string    `json:"observed_addr"`
-	Granted      Limits    `json:"granted"`
-	Node         NodeInfo  `json:"node"`
+	SessionID    string      `json:"session_id"`
+	Secret       string      `json:"secret"`
+	ExpiresAt    time.Time   `json:"expires_at"`
+	ObservedAddr string      `json:"observed_addr"`
+	Granted      Limits      `json:"granted"`
+	Node         NodeInfo    `json:"node"`
+	Stamp        *StampGrant `json:"stamp,omitempty"`
+}
+
+// StampGrant identifies a session's STAMP packets (RFC 8972 SSID); never 0.
+type StampGrant struct {
+	SSID uint16 `json:"ssid"`
+}
+
+// StampCounts are what the node's reflector saw of one session. Received counts
+// authenticated packets it answered; OverRate and OtherAddr are packets it dropped
+// for exceeding the granted rate or for coming from another source address.
+type StampCounts struct {
+	Received  uint64 `json:"received"`
+	OverRate  uint64 `json:"over_rate"`
+	OtherAddr uint64 `json:"other_addr"`
 }
 
 func (r *SessionResponse) Validate() error {
@@ -133,6 +159,9 @@ func (r *SessionResponse) Validate() error {
 	}
 	if err := r.Granted.validate(true); err != nil {
 		return fmt.Errorf("granted: %w", err)
+	}
+	if r.Stamp != nil && r.Stamp.SSID == 0 {
+		return errors.New("stamp: ssid must not be 0")
 	}
 	return r.Node.validate()
 }
@@ -156,9 +185,11 @@ func DecodeID(s string) ([16]byte, error) {
 	return id, decodeFixed(s, id[:])
 }
 
-// SessionEnd answers DELETE on a session with the node's load at that moment.
+// SessionEnd answers DELETE on a session with the node's load at that moment, and
+// for a session that sent STAMP packets, what the reflector saw of them.
 type SessionEnd struct {
-	Node NodeInfo `json:"node"`
+	Node  NodeInfo     `json:"node"`
+	Stamp *StampCounts `json:"stamp,omitempty"`
 }
 
 func (r *SessionEnd) Validate() error { return r.Node.validate() }

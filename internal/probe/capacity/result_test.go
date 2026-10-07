@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Lynthar/ConnVerifier/internal/i18n"
+	"github.com/Lynthar/ConnVerifier/internal/probe/nodeclient"
 	"github.com/Lynthar/ConnVerifier/internal/protocol"
 	"github.com/Lynthar/ConnVerifier/internal/report"
 	"github.com/Lynthar/ConnVerifier/internal/result"
@@ -131,17 +132,17 @@ func TestPreRunOutcomes(t *testing.T) {
 	cfg := validClientConfig()
 	tests := []struct {
 		name string
-		err  *sessionError
+		err  *nodeclient.Error
 		key  string
 	}{
-		{"wrong key", &sessionError{kind: "identity", err: protocol.ErrPinMismatch}, "tcp_capacity.error.node_identity"},
-		{"unreachable", &sessionError{kind: "unreachable", err: errors.New("connection refused")}, "tcp_capacity.error.node_unreachable"},
-		{"refused", &sessionError{kind: "refused", refusal: &protocol.ErrorResponse{Reason: "auth"}}, "tcp_capacity.error.session_refused"},
-		{"busy", &sessionError{kind: "busy", refusal: &protocol.ErrorResponse{Reason: "busy", RetryAfterS: 60}}, "tcp_capacity.error.node_busy"},
+		{"wrong key", &nodeclient.Error{Kind: "identity", Err: protocol.ErrPinMismatch}, "session.error.node_identity"},
+		{"unreachable", &nodeclient.Error{Kind: "unreachable", Err: errors.New("connection refused")}, "session.error.node_unreachable"},
+		{"refused", &nodeclient.Error{Kind: "refused", Refusal: &protocol.ErrorResponse{Reason: "auth"}}, "session.error.session_refused"},
+		{"busy", &nodeclient.Error{Kind: "busy", Refusal: &protocol.ErrorResponse{Reason: "busy", RetryAfterS: 60}}, "session.error.node_busy"},
 	}
 	for _, tt := range tests {
 		c := newCheck(cfg, "192.0.2.10:7443", "test")
-		sessionFailed(&c, tt.err)
+		nodeclient.Failed(&c, tt.err)
 		if c.Status != result.Error || c.Error == nil || c.Error.Key != tt.key {
 			t.Errorf("%s: status %s error %+v, want ERROR %s", tt.name, c.Status, c.Error, tt.key)
 		}
@@ -282,21 +283,21 @@ func TestTextHasNoRawKeys(t *testing.T) {
 		finishCheck(&c, cfg, finalStats{snap: r.s}, newRttHistogram(), r.ri)
 		run.Checks = append(run.Checks, c)
 	}
-	for _, e := range []*sessionError{
-		{kind: "identity", err: protocol.ErrPinMismatch},
-		{kind: "unreachable", err: errors.New("refused")},
-		{kind: "refused", refusal: &protocol.ErrorResponse{Reason: "auth", Message: "m"}},
-		{kind: "busy", refusal: &protocol.ErrorResponse{Reason: "busy", RetryAfterS: 60}},
+	for _, e := range []*nodeclient.Error{
+		{Kind: "identity", Err: protocol.ErrPinMismatch},
+		{Kind: "unreachable", Err: errors.New("refused")},
+		{Kind: "refused", Refusal: &protocol.ErrorResponse{Reason: "auth", Message: "m"}},
+		{Kind: "busy", Refusal: &protocol.ErrorResponse{Reason: "busy", RetryAfterS: 60}},
 	} {
 		c := newCheck(cfg, "192.0.2.10:7443", "test")
-		sessionFailed(&c, e)
+		nodeclient.Failed(&c, e)
 		run.Checks = append(run.Checks, c)
 	}
 	idle := newCheck(cfg, "192.0.2.10:7443", "test")
 	idleTooShort(&idle, protocol.Limits{IdleTimeoutS: 1}, 2*time.Second)
 	run.Checks = append(run.Checks, idle)
 
-	rawKey := regexp.MustCompile(`\b(tcp_capacity|metric|param|label|section|status|check|line|value|confirm|node)\.[A-Za-z_]`)
+	rawKey := regexp.MustCompile(`\b(tcp_capacity|session|metric|param|label|section|status|check|line|value|confirm|node)\.[A-Za-z_]`)
 	untilStopped, timed := validClientConfig(), validClientConfig()
 	untilStopped.duration, timed.duration = 0, time.Minute
 	for _, lang := range i18n.Supported {

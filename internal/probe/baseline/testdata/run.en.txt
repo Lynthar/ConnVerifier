@@ -1,0 +1,88 @@
+UDP round trip and loss: attention (WARN)
+Node: 192.0.2.10:7443 · IPv4 · UDP
+Method version: 1
+Elapsed: 23.1 s
+Parameters
+  Test duration: 20 s
+  Probe packet size (bytes): 112
+  Probe packets per second: 50
+  Reply waiting time: 3 s
+Reported by the node
+  Name: example
+  Version: v0.0.0-golden
+  This host's address as the node saw it: 198.51.100.7:51234
+  Granted: connections 1 · new per second 1 · length 36 s · idle 1 min · STAMP per second 100
+  Load at start: sessions 1 · connections 0/20000
+  Load at end: sessions 0 · connections 0/20000
+Observed
+  Probes sent: 1000
+  Replies in time: 979
+  Lost (no reply in time): 21
+  Of those, replies that came late: 1
+  Loss: 2.1% (95% interval 1.38–3.19%, samples: 1000)
+  Lost on the way to the node: 10
+  Lost on the way back: 11
+  Loss on the way to the node: 1% (95% interval 0.54–1.83%, samples: 1000)
+  Loss on the way back: 1.11% (95% interval 0.62–1.98%, samples: 990)
+  Duplicated on the way to the node: 0
+  Duplicated on the way back: 1
+  Duplication: 0.1% (95% interval 0.02–0.58%, samples: 979)
+  Reordered (round trip): 1
+  Reordered on the way to the node: 0
+  Reordering: 0.1% (95% interval 0.02–0.58%, samples: 979)
+  Round trip minimum: 30 ms (979 samples)
+  Round trip p50: 34 ms (979 samples)
+  Round trip p95: 38 ms (979 samples)
+  Round trip p99: 38 ms (979 samples)
+  Round trip p99.9: too few samples (979)
+  Delay variation p50 (above the minimum): 4 ms (979 samples)
+  Delay variation p95: 8 ms (979 samples)
+  Delay variation p99: 8 ms (979 samples)
+  Delay variation p99.9: too few samples (979)
+  Time the node held a packet, p50: 40 µs (979 samples)
+  Time the node held a packet, p99: 40 µs (979 samples)
+  Probes sent more than 10 ms late: 0
+  Probes this host failed to send: 0
+Inferred
+  - Probes without a reply in time: 21, of which replies that came late: 1.
+  - Duplicated packets — on the way to the node: 0; on the way back: 1.
+  - Replies that arrived out of order: 1; of them reordered on the way to the node: 0.
+Not proven
+  - This host's CPU load and other traffic during the run were not checked; either can add delay that is not the network's.
+  - Return-path loss is measured only on packets that reached the node; with loss on the way there it rests on fewer samples.
+
+TCP round trip: attention (WARN)
+Node: 192.0.2.10:7443 · IPv4 · TCP
+Method version: 1
+Elapsed: 23.1 s
+Parameters
+  Test duration: 20 s
+  Probe packet size (bytes): 11
+  Probe packets per second: 50
+  Reply waiting time: 3 s
+Reported by the node
+  Name: example
+  Version: v0.0.0-golden
+  This host's address as the node saw it: 198.51.100.7:51234
+  Granted: connections 1 · new per second 1 · length 36 s · idle 1 min · STAMP per second 100
+  Load at start: sessions 1 · connections 0/20000
+  Load at end: sessions 0 · connections 0/20000
+Observed
+  Probes sent: 1000
+  Replies in time: 979
+  Echoes not answered in time: 21
+  Round trip minimum: 30 ms (979 samples)
+  Round trip p50: 34 ms (979 samples)
+  Round trip p95: 38 ms (979 samples)
+  Round trip p99: 38 ms (979 samples)
+  Round trip p99.9: too few samples (979)
+  Delay variation p50 (above the minimum): 4 ms (979 samples)
+  Delay variation p95: 8 ms (979 samples)
+  Delay variation p99: 8 ms (979 samples)
+  Delay variation p99.9: too few samples (979)
+  Probes sent more than 10 ms late: 0
+Inferred
+  - Echoes that did not come back within the waiting time: 21. On TCP a lost segment shows up as such a delay: the stream waits for its retransmission.
+Not proven
+  - This host's CPU load and other traffic during the run were not checked; either can add delay that is not the network's.
+  - The node's own handling time is not separated from the round trip.

@@ -19,6 +19,8 @@ func TestDialAndListenOnlyHere(t *testing.T) {
 	forbidden := map[string]bool{
 		"Dial": true, "DialTimeout": true, "DialTCP": true, "Dialer": true,
 		"Listen": true, "ListenTCP": true, "ListenConfig": true,
+		"ListenPacket": true, "ListenUDP": true, "DialUDP": true, "ListenMulticastUDP": true,
+		"ListenIP": true, "DialIP": true, "ListenUnix": true, "ListenUnixgram": true, "DialUnix": true,
 	}
 	self, err := filepath.Abs(".")
 	if err != nil {

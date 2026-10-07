@@ -3,45 +3,22 @@ package capacity
 import (
 	"context"
 	"flag"
-	"net"
 	"path/filepath"
 	"runtime"
 	"slices"
-	"sync"
 	"testing"
 	"time"
 
+	"github.com/Lynthar/ConnVerifier/internal/memnet"
 	"github.com/Lynthar/ConnVerifier/internal/node"
+	"github.com/Lynthar/ConnVerifier/internal/probe/nodeclient"
 	"github.com/Lynthar/ConnVerifier/internal/protocol"
 	"github.com/Lynthar/ConnVerifier/internal/result"
 )
 
-// chanListener is a listener fed by net.Pipe ends, so a real node can run in memory.
-type chanListener struct {
-	conns chan net.Conn
-	done  chan struct{}
-	once  sync.Once
-}
-
-func (l *chanListener) Accept() (net.Conn, error) {
-	select {
-	case c := <-l.conns:
-		return c, nil
-	case <-l.done:
-		return nil, net.ErrClosed
-	}
-}
-
-func (l *chanListener) Close() error {
-	l.once.Do(func() { close(l.done) })
-	return nil
-}
-
-func (l *chanListener) Addr() net.Addr { return &net.TCPAddr{} }
-
 type memNode struct {
 	invite string
-	dial   dialFunc
+	dial   nodeclient.DialFunc
 	stop   func()
 }
 
@@ -50,7 +27,7 @@ type memNode struct {
 func startNode(t *testing.T, lim node.InviteLimits, flags ...string) memNode {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "node")
-	inv, err := node.CreateInvite(dir, "mem", []string{"192.0.2.10:7443"}, lim)
+	inv, err := node.CreateInvite(dir, "mem", []string{"192.0.2.10:7443"}, 0, lim)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,22 +37,11 @@ func startNode(t *testing.T, lim node.InviteLimits, flags ...string) memNode {
 	if err := fs.Parse(append([]string{"-state-dir", dir}, flags...)); err != nil {
 		t.Fatal(err)
 	}
-	ln := &chanListener{conns: make(chan net.Conn), done: make(chan struct{})}
+	ln := memnet.NewListener()
 	ctx, cancel := context.WithCancel(context.Background())
 	stopped := make(chan struct{})
-	go func() { node.ServeOn(ctx, ln, cfg, "vtest"); close(stopped) }()
-	dial := func(ctx context.Context, _, _ string) (net.Conn, error) {
-		c, s := net.Pipe()
-		select {
-		case ln.conns <- s:
-			return c, nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-ln.done:
-			return nil, net.ErrClosed
-		}
-	}
-	return memNode{invite: inv.Encode(), dial: dial, stop: func() { cancel(); <-stopped }}
+	go func() { node.ServeOn(ctx, ln, nil, cfg, "vtest"); close(stopped) }()
+	return memNode{invite: inv.Encode(), dial: ln.Dial, stop: func() { cancel(); <-stopped }}
 }
 
 func memRun(n memNode, clients int, duration time.Duration) Config {
@@ -210,7 +176,7 @@ func TestWrongPinStopsBeforeTheToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Status != result.Error || c.Error == nil || c.Error.Key != "tcp_capacity.error.node_identity" {
+	if c.Status != result.Error || c.Error == nil || c.Error.Key != "session.error.node_identity" {
 		t.Fatalf("status %s error %+v, want ERROR node_identity", c.Status, c.Error)
 	}
 	if c.Node.Granted != nil {
@@ -272,7 +238,7 @@ func TestSessionRefusedWhenInviteIsBusy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Status != result.Error || c.Error == nil || c.Error.Key != "tcp_capacity.error.node_busy" {
+	if c.Status != result.Error || c.Error == nil || c.Error.Key != "session.error.node_busy" {
 		t.Fatalf("status %s error %+v, want ERROR node_busy", c.Status, c.Error)
 	}
 	if f := <-first; f.Status != result.Pass {

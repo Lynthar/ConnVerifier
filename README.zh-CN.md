@@ -14,6 +14,9 @@
 每一次掉线都归因到悄悄超时、被关闭、被重置，还是节点说明原因后关闭。节点满了会直说，
 结果也会写明上限是节点定的，不是你的网络。
 
+`connverifier check` 在同一条路径上并排测 UDP 和 TCP 的往返时延及其变化，以及 UDP 丢包——
+不用对时，也能把丢包拆成去程和回程。
+
 单个程序，一个依赖（`golang.org/x/term`）。
 
 ## 构建
@@ -35,7 +38,7 @@ go build -o bin/connverifier ./cmd/connverifier
 ## 用法
 
 在服务器上起节点，给每个要来测的人各建一张邀请串。节点只开一个 TCP 端口（默认 7443），
-所有流量都走它：
+所有 TCP 流量都走它；UDP 探测在同号端口上应答——防火墙两样都要放行：
 
 ```bash
 ulimit -n 20480
@@ -56,7 +59,28 @@ ulimit -n 20480
 ./bin/connverifier capacity -node @alice.invite -clients 1000 -duration 1h -yes
 ```
 
-运行中每秒往 stderr 打一行进度。结束时结果写到 stdout，默认是文本，`-format json` 则输出
+`check` 不需要确认：它在 UDP 和 TCP 上各发每秒 50 个小包，持续 20 秒（`-rate`、`-duration`）。
+UDP 探测出现之前建的邀请串里没有 UDP 端口，这时 UDP 那一项报 `UNSUPPORTED`。
+
+```bash
+./bin/connverifier check -node @alice.invite
+```
+
+```
+UDP 往返时延与丢包：注意（WARN）
+节点：192.0.2.10:7443 · IPv4 · UDP
+观测
+  发出的探测：1000
+  丢失（未按时收到回包）：21
+  丢包率：2.1%（95% 区间 1.38–3.19%，1000 个样本）
+  去程丢失：10
+  回程丢失：11
+  往返时延 p50：34 ms（979 个样本）
+推断
+  - 没有按时收到回包的探测：21 个，其中迟到的：1 个。
+```
+
+`capacity` 运行中每秒往 stderr 打一行进度。结束时结果写到 stdout，默认是文本，`-format json` 则输出
 JSON。节选：
 
 ```
@@ -81,18 +105,21 @@ TCP 长连接容量：注意（WARN）
 `-lang en` 或 `-lang zh-CN` 可以覆盖。每个状态和数字是什么意思、什么时候不该信，见
 [docs/methods](docs/methods/README.md)（英文）；节点协议见 [docs/protocol.md](docs/protocol.md)。
 
-全部走旗标。`capacity`：`-node`、`-clients`（1000）、`-start-rate`（100）、`-heartbeat`（30s）、
+全部走旗标。`check`：`-node`、`-rate`（50）、`-duration`（20s）、`-dial-timeout`（5s）、
+`-format`、`-lang`。`capacity`：`-node`、`-clients`（1000）、`-start-rate`（100）、`-heartbeat`（30s）、
 `-dial-timeout`（5s）、`-io-timeout`（5s）、`-min-backoff`（500ms）、`-max-backoff`（1m）、
 `-duration`（0＝直到中断）、`-log-drops`、`-format`（text）、`-lang`、`-yes`。`serve`：
-`-listen`（:7443）、`-state-dir`、`-max-conns`（20000）、`-max-sessions`（64）、
-`-log-connections`。`invite create`：`-label`、`-addr`（可重复）、`-max-sessions`（2）、
-`-max-connections`（20000）、`-max-dial-rate`（1000）、`-max-duration`（24h）、`-max-idle`（1h）。
+`-listen`（:7443）、`-listen-udp`（同 `-listen`）、`-state-dir`、`-max-conns`（20000）、
+`-max-sessions`（64）、`-log-connections`。`invite create`：`-label`、`-addr`（可重复）、
+`-udp-port`（第一个 `-addr` 的端口）、`-max-sessions`（2）、`-max-connections`（20000）、
+`-max-dial-rate`（1000）、`-max-stamp-rate`（100）、`-max-duration`（24h）、`-max-idle`（1h）。
 
 两端都不开 TCP keepalive：keepalive 会不断刷新 NAT 映射，那样测出来的结果永远是「NAT 很稳」。
 
 ## 能力边界
 
-- **只测 TCP。** 没有 UDP、没有 STUN、没有 DNS、不测带宽。
+- **只测空闲路径。** 不测带宽和跑满时的时延，没有 STUN、没有 DNS，UDP 只用一种包长；
+  时延只有往返，从不报单向。
 - **JSON 的 schema 还是 `v0`。** 不同构建之间仍可能变；要解析就固定一个构建，别解析文本。
 - **退出码不评判网络质量。** 0 表示跑完了，不管各项状态如何；1 表示有检查没拿到有效
   测量（状态 `ERROR`，比如节点连不上），或工具自己出错；2 表示什么都没跑：参数不对，或
@@ -114,7 +141,8 @@ RTT 百分位、掉线归因、带抖动的指数退避重连，以及给无人�
 - **邀请串等同于密码。** 谁拿到它，谁就能在那张邀请串的额度内使用节点。私下发送；
   用 `invite revoke` 吊销。
 - **节点只接待持邀请串的人。** 10 秒内完不成 TLS 或有效票据的连接会被断开，每个地址同时
-  只能挂几条这样的连接。节点从不替客户端去连别处。
+  只能挂几条这样的连接。节点从不替客户端去连别处；UDP 探测只回应用活会话密钥签过名的包，
+  回包不比来包大。
 - **客户端会核对节点的密钥。** 邀请串钉住了节点公钥；节点出示别的密钥，客户端在发出令牌
   之前就会拒绝。
 - **节点能看到你的公网地址**——你连的任何服务器都能。结果会在本地记下它，但结果里永远不含

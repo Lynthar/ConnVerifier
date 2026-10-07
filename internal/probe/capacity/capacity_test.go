@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Lynthar/ConnVerifier/internal/probe/nodeclient"
 	"github.com/Lynthar/ConnVerifier/internal/protocol"
 )
 
@@ -33,7 +34,7 @@ func validClientConfig() Config {
 }
 
 func TestValidateConfig(t *testing.T) {
-	t.Setenv(InviteEnv, "")
+	t.Setenv(nodeclient.InviteEnv, "")
 	if err := validClientConfig().Validate(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
 	}
@@ -77,7 +78,7 @@ func TestInviteFromFileAndEnvironment(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("invite from file: %v", err)
 	}
-	t.Setenv(InviteEnv, testInvite)
+	t.Setenv(nodeclient.InviteEnv, testInvite)
 	cfg.node = ""
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("invite from environment: %v", err)

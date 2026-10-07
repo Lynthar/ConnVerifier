@@ -57,7 +57,11 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, protocol.ErrReasonBadRequest, 0, err.Error())
 		return
 	}
-	if req.Check != "tcp-capacity" {
+	switch {
+	case req.Check == protocol.CheckBaseline && s.udp:
+	case req.Check == protocol.CheckBaseline, req.Check == protocol.CheckTCPCapacity:
+		req.Want.StampRate = 0 // no reflector here, or a check that sends no STAMP
+	default:
 		writeError(w, http.StatusBadRequest, protocol.ErrReasonBadRequest, 0, "unsupported check")
 		return
 	}
@@ -77,14 +81,18 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.logConnections {
 		log.Printf("session for %q from %s granted %+v", inv.Label, observed, sess.granted)
 	}
-	writeJSON(w, http.StatusCreated, protocol.SessionResponse{
+	resp := protocol.SessionResponse{
 		SessionID:    protocol.EncodeID(sess.id[:]),
 		Secret:       protocol.EncodeID(sess.secret),
 		ExpiresAt:    sess.expires.UTC(),
 		ObservedAddr: observed,
 		Granted:      sess.granted,
 		Node:         s.nodeInfo(),
-	})
+	}
+	if sess.stamp != nil {
+		resp.Stamp = &protocol.StampGrant{SSID: sess.stamp.ssid}
+	}
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 func (s *server) endSession(w http.ResponseWriter, r *http.Request) {
@@ -99,8 +107,12 @@ func (s *server) endSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	found := false
+	var stamp *protocol.StampCounts
 	conns := s.store.end(func(sess *session) bool {
 		match := sess.id == id && sess.invite == inv.TokenSHA256
+		if match && sess.stamp != nil {
+			stamp = sess.stamp.counts()
+		}
 		found = found || match
 		return match
 	})
@@ -109,7 +121,7 @@ func (s *server) endSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	closeAll(conns, protocol.ReasonSessionEnded)
-	writeJSON(w, http.StatusOK, protocol.SessionEnd{Node: s.nodeInfo()})
+	writeJSON(w, http.StatusOK, protocol.SessionEnd{Node: s.nodeInfo(), Stamp: stamp})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

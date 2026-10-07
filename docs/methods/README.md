@@ -7,6 +7,8 @@ version follows.
 | Check id | Method version | Document |
 |---|---|---|
 | `tcp-capacity` | 3 | [tcp-capacity.md](tcp-capacity.md) |
+| `udp-baseline` | 1 | [udp-baseline.md](udp-baseline.md) |
+| `tcp-baseline` | 1 | [tcp-baseline.md](tcp-baseline.md) |
 
 ## What each method document answers
 

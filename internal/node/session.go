@@ -52,6 +52,7 @@ type session struct {
 	expires time.Time
 	dials   bucket
 	conns   map[*dataConn]struct{} // live; guarded by store.mu
+	stamp   *stampState            // nil unless granted a STAMP rate
 }
 
 // store holds sessions and enforces every count: sessions per invite and in
@@ -59,6 +60,7 @@ type session struct {
 type store struct {
 	mu          sync.Mutex
 	sessions    map[[16]byte]*session
+	bySSID      map[uint16]*session
 	perInvite   map[string]int
 	liveConns   int
 	maxConns    int
@@ -70,6 +72,7 @@ type store struct {
 func newStore(maxConns, maxSessions int, now time.Time) *store {
 	return &store{
 		sessions:    make(map[[16]byte]*session),
+		bySSID:      make(map[uint16]*session),
 		perInvite:   make(map[string]int),
 		maxConns:    maxConns,
 		maxSessions: maxSessions,
@@ -96,6 +99,7 @@ func (s *store) create(invite string, lim InviteLimits, want protocol.Limits, no
 		DialRate:     min(want.DialRate, lim.MaxDialRate),
 		DurationS:    lim.MaxDurationS,
 		IdleTimeoutS: min(want.IdleTimeoutS, lim.MaxIdleTimeoutS),
+		StampRate:    min(want.StampRate, lim.MaxStampRate),
 	}
 	if want.DurationS > 0 {
 		g.DurationS = min(want.DurationS, lim.MaxDurationS)
@@ -121,6 +125,10 @@ func (s *store) create(invite string, lim InviteLimits, want protocol.Limits, no
 	}
 	if len(s.sessions) >= s.maxSessions {
 		return nil, protocol.ErrReasonBusy
+	}
+	if g.StampRate > 0 {
+		sess.stamp = newStampState(s.freeSSID(), protocol.StampKey(sess.secret), g.StampRate, now)
+		s.bySSID[sess.stamp.ssid] = sess
 	}
 	s.sessions[sess.id] = sess
 	s.perInvite[invite]++
@@ -182,6 +190,9 @@ func (s *store) end(pick func(*session) bool) []*dataConn {
 			conns = append(conns, c)
 		}
 		s.liveConns -= len(sess.conns)
+		if sess.stamp != nil {
+			delete(s.bySSID, sess.stamp.ssid)
+		}
 		s.perInvite[sess.invite]--
 		if s.perInvite[sess.invite] == 0 {
 			delete(s.perInvite, sess.invite)

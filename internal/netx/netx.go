@@ -24,6 +24,22 @@ func Listen(ctx context.Context, address string, keepAlive time.Duration) (net.L
 	return lc.Listen(ctx, "tcp", address)
 }
 
+// ListenPacket opens a UDP socket on address for the node to answer on.
+func ListenPacket(ctx context.Context, address string) (net.PacketConn, error) {
+	var lc net.ListenConfig
+	return lc.ListenPacket(ctx, "udp", address)
+}
+
+// DialUDP opens a UDP socket connected to address, so only its replies arrive.
+func DialUDP(ctx context.Context, address string) (*net.UDPConn, error) {
+	var d net.Dialer
+	c, err := d.DialContext(ctx, "udp", address)
+	if err != nil {
+		return nil, err
+	}
+	return c.(*net.UDPConn), nil
+}
+
 // keepAlivePeriod maps "<= 0 disables" onto package net, where zero silently
 // enables 15s probes and only a negative value disables them.
 func keepAlivePeriod(d time.Duration) time.Duration {
