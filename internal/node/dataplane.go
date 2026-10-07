@@ -66,6 +66,7 @@ func (s *server) countReject(r protocol.Reason) {
 		s.stats.rejectedBusy.Add(1)
 	case protocol.ReasonQuota:
 		s.stats.rejectedQuota.Add(1)
+	case protocol.ReasonShuttingDown: // the node's doing, not a refusal of the client
 	default:
 		s.stats.rejectedAuth.Add(1)
 	}

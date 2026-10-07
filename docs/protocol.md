@@ -89,7 +89,7 @@ at most 256 bytes and only explains.
 | 401 | `auth` | Token unknown or revoked |
 | 404 | `bad_request` | No such session for this token |
 | 429 | `quota` | The invite has its maximum number of sessions, or too many requests from this address |
-| 503 | `busy` | The node has its maximum number of sessions |
+| 503 | `busy` | The node has its maximum number of sessions, or is shutting down |
 
 ## Data plane
 

@@ -171,14 +171,11 @@ func (s *server) serve(ctx context.Context, ln net.Listener) {
 		}()
 	}
 
-	// CLOSE goes out before the HTTP shutdown, which can wait a second for an HTTP/2
-	// peer; the sweep after it catches sessions opened by requests still in flight.
-	every := func(*session) bool { return true }
-	closeAll(s.store.end(every), protocol.ReasonShuttingDown)
+	// CLOSE goes out before the HTTP shutdown, which can wait a second for an HTTP/2 peer.
+	closeAll(s.store.close(), protocol.ReasonShuttingDown)
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	hs.Shutdown(shutdownCtx)
-	closeAll(s.store.end(every), protocol.ReasonShuttingDown)
 	s.wg.Wait()
 	l := s.store.load()
 	log.Printf("shutdown: sessions=%d connections=%d", l.Sessions, l.Connections)

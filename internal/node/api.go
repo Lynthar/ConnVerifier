@@ -67,7 +67,7 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusTooManyRequests, reason, 60, "this invite already has its maximum number of sessions")
 		return
 	case protocol.ErrReasonBusy:
-		writeError(w, http.StatusServiceUnavailable, reason, 60, "the node has its maximum number of sessions")
+		writeError(w, http.StatusServiceUnavailable, reason, 60, "the node has no room for another session")
 		return
 	}
 	observed := ""

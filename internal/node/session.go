@@ -64,6 +64,7 @@ type store struct {
 	maxConns    int
 	maxSessions int
 	started     time.Time
+	closing     bool // set by close: no new sessions or connections
 }
 
 func newStore(maxConns, maxSessions int, now time.Time) *store {
@@ -112,6 +113,9 @@ func (s *store) create(invite string, lim InviteLimits, want protocol.Limits, no
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closing {
+		return nil, protocol.ErrReasonBusy
+	}
 	if s.perInvite[invite] >= lim.MaxSessions {
 		return nil, protocol.ErrReasonQuota
 	}
@@ -130,6 +134,8 @@ func (s *store) admit(h protocol.Hello, c *dataConn, now time.Time) protocol.Rea
 	defer s.mu.Unlock()
 	sess := s.sessions[h.SessionID]
 	switch {
+	case s.closing:
+		return protocol.ReasonShuttingDown
 	case sess == nil || !now.Before(sess.expires) || !h.Verify(sess.secret):
 		return protocol.ReasonAuth
 	case s.liveConns >= s.maxConns:
@@ -183,6 +189,15 @@ func (s *store) end(pick func(*session) bool) []*dataConn {
 		delete(s.sessions, id)
 	}
 	return conns
+}
+
+// close ends every session and refuses new ones and new connections from then on,
+// so a HELLO racing the shutdown hears shutting_down instead of auth.
+func (s *store) close() []*dataConn {
+	s.mu.Lock()
+	s.closing = true
+	s.mu.Unlock()
+	return s.end(func(*session) bool { return true })
 }
 
 // closeAll sends CLOSE(reason) to each connection and closes it.

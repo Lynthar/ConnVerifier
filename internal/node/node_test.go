@@ -184,6 +184,27 @@ func TestAdmit(t *testing.T) {
 	}
 }
 
+// A HELLO racing the shutdown hears shutting_down, not auth, and no session opens.
+func TestStoreCloseRefusesWithShuttingDown(t *testing.T) {
+	now := time.Now()
+	st := newStore(10, 4, now)
+	sess, _ := st.create("inv", DefaultInviteLimits, want(2), now)
+	c := &dataConn{}
+	st.admit(protocol.NewHello(sess.secret, sess.id, [16]byte{1}), c, now)
+	if conns := st.close(); len(conns) != 1 || conns[0] != c {
+		t.Fatalf("close returned %d connections, want the live one", len(conns))
+	}
+	if r := st.admit(protocol.NewHello(sess.secret, sess.id, [16]byte{2}), &dataConn{}, now); r != protocol.ReasonShuttingDown {
+		t.Fatalf("HELLO during shutdown = %v, want shutting_down", r)
+	}
+	if _, reason := st.create("inv", DefaultInviteLimits, want(1), now); reason != protocol.ErrReasonBusy {
+		t.Fatalf("session during shutdown = %q, want busy", reason)
+	}
+	if l := st.load(); l.Sessions != 0 || l.Connections != 0 {
+		t.Fatalf("load after close %+v", l)
+	}
+}
+
 // dataPipe opens a data-plane connection to s in memory and sends a HELLO.
 func dataPipe(t *testing.T, s *server, sess *session) (net.Conn, chan struct{}) {
 	t.Helper()
