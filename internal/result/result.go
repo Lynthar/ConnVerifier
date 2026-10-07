@@ -4,6 +4,7 @@
 package result
 
 import (
+	"math"
 	"time"
 
 	"github.com/Lynthar/ConnVerifier/internal/stats"
@@ -140,9 +141,13 @@ func Ratio(id string, k, n uint64) Metric {
 		return Metric{ID: id, Unit: UnitPercent, Insufficient: true}
 	}
 	lo, hi := stats.Wilson(k, n)
-	v, l, h := 100*float64(k)/float64(n), 100*lo, 100*hi
+	v, l, h := round4(100*float64(k)/float64(n)), round4(100*lo), round4(100*hi)
 	return Metric{ID: id, Unit: UnitPercent, Value: &v, Low: &l, High: &h, Samples: n}
 }
+
+// round4 keeps four decimals. CPUs that fuse multiply-add compute the interval a
+// few bits differently from those that do not, and a result must not depend on that.
+func round4(x float64) float64 { return math.Round(x*1e4) / 1e4 }
 
 // ExitCode is 1 when any check ended in ERROR and 0 otherwise: the exit status
 // reports whether measurements were obtained, not how good the network is.
