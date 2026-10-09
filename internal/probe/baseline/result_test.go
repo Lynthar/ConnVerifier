@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Lynthar/ConnVerifier/internal/i18n"
+	"github.com/Lynthar/ConnVerifier/internal/probe/echo"
 	"github.com/Lynthar/ConnVerifier/internal/protocol"
 	"github.com/Lynthar/ConnVerifier/internal/report"
 	"github.com/Lynthar/ConnVerifier/internal/result"
@@ -18,27 +19,29 @@ import (
 
 var update = flag.Bool("update", false, "rewrite golden files")
 
+var t0 = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
 // syntheticProbes is n probes 20 ms apart with made-up delays: every 50th lost,
 // one late, one duplicated on the way back and one pair swapped.
-func syntheticProbes(n int) (probes []probe, arrivals []int) {
+func syntheticProbes(n int) (probes []echo.Probe, arrivals []int) {
 	for i := range n {
 		sent := t0.Add(time.Duration(i) * 20 * time.Millisecond)
-		p := probe{planned: sent, sent: sent}
+		p := echo.Probe{Planned: sent, Sent: sent}
 		rtt := 30*time.Millisecond + time.Duration(i%9)*time.Millisecond
 		switch {
 		case i%50 == 49:
 		case i == 100:
-			p.replies = []reply{{at: sent.Add(4 * time.Second), reflSeq: uint32(i)}}
+			p.Replies = []echo.Reply{{At: sent.Add(4 * time.Second), ReflSeq: uint32(i)}}
 		default:
-			p.replies = []reply{{at: sent.Add(rtt), reflSeq: uint32(i), residence: 40 * time.Microsecond}}
+			p.Replies = []echo.Reply{{At: sent.Add(rtt), ReflSeq: uint32(i), Residence: 40 * time.Microsecond}}
 		}
 		if i == 200 {
-			p.replies = append(p.replies, p.replies[0])
+			p.Replies = append(p.Replies, p.Replies[0])
 		}
 		probes = append(probes, p)
 	}
 	for i := range n {
-		if len(probes[i].replies) > 0 && i != 100 {
+		if len(probes[i].Replies) > 0 && i != 100 {
 			arrivals = append(arrivals, i)
 		}
 	}
@@ -46,15 +49,15 @@ func syntheticProbes(n int) (probes []probe, arrivals []int) {
 	return probes, arrivals
 }
 
-func syntheticUDP(n int, sendErrors uint64) *udpRun {
-	r := &udpRun{end: t0.Add(time.Minute), sendErrors: sendErrors}
-	r.probes, r.arrivals = syntheticProbes(n)
+func syntheticUDP(n int, sendErrors uint64) *echo.UDPRun {
+	r := &echo.UDPRun{End: t0.Add(time.Minute), SendErrors: sendErrors}
+	r.Probes, r.Arrivals = syntheticProbes(n)
 	return r
 }
 
-func syntheticTCP(n int) *tcpRun {
-	r := &tcpRun{end: t0.Add(time.Minute)}
-	r.probes, r.arrivals = syntheticProbes(n)
+func syntheticTCP(n int) *echo.TCPRun {
+	r := &echo.TCPRun{End: t0.Add(time.Minute)}
+	r.Probes, r.Arrivals = syntheticProbes(n)
 	return r
 }
 
@@ -68,10 +71,10 @@ func goldenRun() result.Run {
 	}
 	udp := newCheck("udp-baseline", "udp", cfg, "192.0.2.10:7443", "example", udpPacketLen)
 	udp.Node = node
-	finishUDP(&udp, syntheticUDP(1000, 0), &protocol.StampCounts{Received: 990}, defaultTmax, defaultSlipLimit)
+	finishUDP(&udp, syntheticUDP(1000, 0), &protocol.StampCounts{Received: 990}, defaultTmax, echo.DefaultSlipLimit)
 	tcp := newCheck("tcp-baseline", "tcp", cfg, "192.0.2.10:7443", "example", tcpPacketLen)
 	tcp.Node = node
-	finishTCP(&tcp, syntheticTCP(1000), defaultTmax, defaultSlipLimit)
+	finishTCP(&tcp, syntheticTCP(1000), defaultTmax, echo.DefaultSlipLimit)
 	udp.ElapsedMs, tcp.ElapsedMs = 23_100, 23_100
 	return result.Run{
 		Schema: result.Schema, Tool: result.Tool{Name: "connverifier", Version: "v0.0.0-golden", Go: "go1.27.0", OS: "linux", Arch: "amd64"},
@@ -126,7 +129,7 @@ func TestTextHasNoRawKeys(t *testing.T) {
 		checks = append(checks, c)
 	}
 	node := &protocol.StampCounts{Received: 1000}
-	for _, o := range []outcome{{}, {sent: 10}, {sent: 1000, received: 900, slipped: 20, slowNode: 20}, {sent: 1000, received: 999, dupForward: 1, dupReturn: 1, reordered: 1}} {
+	for _, o := range []echo.Outcome{{}, {Sent: 10}, {Sent: 1000, Received: 900, Slipped: 20, SlowNode: 20}, {Sent: 1000, Received: 999, DupForward: 1, DupReturn: 1, Reordered: 1}} {
 		for _, counts := range []*protocol.StampCounts{nil, {}, node, {Received: 1, OverRate: 1, OtherAddr: 1}} {
 			add("udp-baseline", func(c *result.Check) { evaluateUDP(c, o, counts) })
 		}
@@ -135,9 +138,9 @@ func TestTextHasNoRawKeys(t *testing.T) {
 		}
 	}
 	add("udp-baseline", func(c *result.Check) {
-		finishUDP(c, syntheticUDP(300, 1), &protocol.StampCounts{Received: 280}, defaultTmax, defaultSlipLimit)
+		finishUDP(c, syntheticUDP(300, 1), &protocol.StampCounts{Received: 280}, defaultTmax, echo.DefaultSlipLimit)
 	})
-	add("udp-baseline", func(c *result.Check) { finishUDP(c, syntheticUDP(300, 0), nil, defaultTmax, defaultSlipLimit) })
+	add("udp-baseline", func(c *result.Check) { finishUDP(c, syntheticUDP(300, 0), nil, defaultTmax, echo.DefaultSlipLimit) })
 	add("udp-baseline", func(c *result.Check) { unsupported(c, "udp_baseline.unsupported.invite_without_udp") })
 	add("tcp-baseline", interruptedBeforeData)
 	add("udp-baseline", func(c *result.Check) { unsupported(c, "udp_baseline.unsupported.node_without_stamp") })
@@ -150,7 +153,7 @@ func TestTextHasNoRawKeys(t *testing.T) {
 	add("udp-baseline", func(c *result.Check) {
 		c.Status, c.Error = result.Error, &result.Message{Key: "udp_baseline.error.no_socket", Params: map[string]any{"error": "x"}}
 	})
-	for _, f := range []dataFailure{{kind: "reject", reject: protocol.Frame{Reason: protocol.ReasonQuota}}, {kind: "reject"}, {kind: "dial", err: errors.New("x")}, {kind: "handshake", err: errors.New("x")}} {
+	for _, f := range []echo.DataFailure{{Kind: "reject", Reject: protocol.Frame{Reason: protocol.ReasonQuota}}, {Kind: "reject"}, {Kind: "dial", Err: errors.New("x")}, {Kind: "handshake", Err: errors.New("x")}} {
 		add("tcp-baseline", func(c *result.Check) { tcpFailed(c, &f) })
 	}
 	run := result.Run{Checks: checks}

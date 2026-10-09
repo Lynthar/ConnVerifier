@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Lynthar/ConnVerifier/internal/netx"
+	"github.com/Lynthar/ConnVerifier/internal/probe/echo"
 	"github.com/Lynthar/ConnVerifier/internal/probe/nodeclient"
 	"github.com/Lynthar/ConnVerifier/internal/protocol"
 	"github.com/Lynthar/ConnVerifier/internal/result"
@@ -97,7 +98,7 @@ func Run(ctx context.Context, cfg Config, version string) ([]result.Check, error
 		cfg.tmax = defaultTmax
 	}
 	if cfg.slipLimit <= 0 {
-		cfg.slipLimit = defaultSlipLimit
+		cfg.slipLimit = echo.DefaultSlipLimit
 	}
 	inv, _ := nodeclient.ResolveInvite(cfg.node)
 	dial := cfg.dial
@@ -146,9 +147,9 @@ func Run(ctx context.Context, cfg Config, version string) ([]result.Check, error
 	}
 
 	var wg sync.WaitGroup
-	var ur *udpRun
-	var tr *tcpRun
-	var tfail *dataFailure
+	var ur *echo.UDPRun
+	var tr *echo.TCPRun
+	var tfail *echo.DataFailure
 	udpAddr, hasPort := inv.UDPAddr(sess.Addr)
 	switch {
 	case !hasPort:
@@ -166,17 +167,17 @@ func Run(ctx context.Context, cfg Config, version string) ([]result.Check, error
 		}
 		wg.Go(func() {
 			defer conn.Close()
-			ur = runUDP(ctx, conn, sess.Secret, sess.Resp.Stamp.SSID, schedule(cfg.packets(), cfg.duration, newRand()), cfg.tmax)
+			ur = echo.RunUDP(ctx, conn, sess.Secret, sess.Resp.Stamp.SSID, echo.Schedule(cfg.packets(), cfg.duration, newRand()), nil, cfg.tmax)
 		})
 	}
 	wg.Go(func() {
-		conn, fail := openData(ctx, dial, sess.Addr, sess.ID, sess.Secret, cfg.dialTimeout)
+		conn, fail := echo.OpenData(ctx, dial, sess.Addr, sess.ID, sess.Secret, cfg.dialTimeout)
 		if fail != nil {
 			tfail = fail
 			return
 		}
 		defer conn.Close()
-		tr = runTCP(ctx, conn, schedule(cfg.packets(), cfg.duration, newRand()), cfg.tmax)
+		tr = echo.RunTCP(ctx, conn, echo.Schedule(cfg.packets(), cfg.duration, newRand()), nil, cfg.tmax)
 	})
 	wg.Wait()
 	end := sess.End() // after both streams stopped, so nothing is in flight

@@ -1,4 +1,4 @@
-package baseline
+package echo
 
 import (
 	"context"
@@ -10,19 +10,20 @@ import (
 	"github.com/Lynthar/ConnVerifier/internal/protocol"
 )
 
-// udpRun is a STAMP stream's raw observations.
-type udpRun struct {
-	stream
-	end        time.Time
-	sendErrors uint64
+// UDPRun is a STAMP stream's raw observations.
+type UDPRun struct {
+	Stream
+	End        time.Time
+	SendErrors uint64
 }
 
-// runUDP sends authenticated STAMP packets on conn at offsets and reads the
-// reflections. Replies that fail authentication or name another session are
-// ignored; they cannot be the node's answer to this stream.
-func runUDP(ctx context.Context, conn net.Conn, secret []byte, ssid uint16, offsets []time.Duration, tmax time.Duration) *udpRun {
+// RunUDP sends authenticated STAMP packets on conn at offsets until stop is closed
+// (nil: until the offsets run out) and reads the reflections. Replies that fail
+// authentication or name another session are ignored; they cannot be the node's
+// answer to this stream.
+func RunUDP(ctx context.Context, conn net.Conn, secret []byte, ssid uint16, offsets []time.Duration, stop <-chan struct{}, tmax time.Duration) *UDPRun {
 	key := protocol.StampKey(secret)
-	r := &udpRun{}
+	r := &UDPRun{}
 	var sendErrors atomic.Uint64
 	send := func(i int, now time.Time) error {
 		b := protocol.StampSender{Seq: uint32(i), Timestamp: protocol.NTPTime(now), SSID: ssid}.Marshal(key)
@@ -50,11 +51,11 @@ func runUDP(ctx context.Context, conn net.Conn, secret []byte, ssid uint16, offs
 			if err != nil || p.SSID != ssid {
 				continue
 			}
-			r.reply(uint64(p.SenderSeq), reply{at: at, reflSeq: p.Seq, residence: p.Timestamp.Sub(p.Received)})
+			r.add(uint64(p.SenderSeq), Reply{At: at, ReflSeq: p.Seq, Residence: p.Timestamp.Sub(p.Received)})
 		}
 	}
-	r.end = r.run(ctx, conn, offsets, tmax, send, read)
-	r.sendErrors = sendErrors.Load()
+	r.End = r.run(ctx, conn, offsets, stop, tmax, send, read)
+	r.SendErrors = sendErrors.Load()
 	return r
 }
 

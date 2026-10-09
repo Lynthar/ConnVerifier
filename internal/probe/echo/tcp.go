@@ -1,4 +1,4 @@
-package baseline
+package echo
 
 import (
 	"context"
@@ -12,20 +12,20 @@ import (
 	"github.com/Lynthar/ConnVerifier/internal/protocol"
 )
 
-// dataFailure is why no data-plane connection was admitted; kind is "dial",
-// "handshake" or "reject", and reject holds the node's REJECT.
-type dataFailure struct {
-	kind   string
-	reject protocol.Frame
-	err    error
+// DataFailure is why no data-plane connection was admitted; Kind is "dial",
+// "handshake" or "reject", and Reject holds the node's REJECT.
+type DataFailure struct {
+	Kind   string
+	Reject protocol.Frame
+	Err    error
 }
 
-// openData dials the node and presents the session ticket; it returns the
+// OpenData dials the node and presents the session ticket; it returns the
 // admitted connection or why there is none.
-func openData(ctx context.Context, dial nodeclient.DialFunc, addr string, id [16]byte, secret []byte, timeout time.Duration) (net.Conn, *dataFailure) {
+func OpenData(ctx context.Context, dial nodeclient.DialFunc, addr string, id [16]byte, secret []byte, timeout time.Duration) (net.Conn, *DataFailure) {
 	conn, err := dial(ctx, "tcp", addr)
 	if err != nil {
-		return nil, &dataFailure{kind: "dial", err: err}
+		return nil, &DataFailure{Kind: "dial", Err: err}
 	}
 	var nonce [16]byte
 	rand.Read(nonce[:])
@@ -44,28 +44,29 @@ func openData(ctx context.Context, dial nodeclient.DialFunc, addr string, id [16
 		return conn, nil
 	case f.Type == protocol.TypeReject:
 		conn.Close()
-		return nil, &dataFailure{kind: "reject", reject: f}
+		return nil, &DataFailure{Kind: "reject", Reject: f}
 	default:
 		err = protocol.ErrMalformed
 	}
 	conn.Close()
-	return nil, &dataFailure{kind: "handshake", err: err}
+	return nil, &DataFailure{Kind: "handshake", Err: err}
 }
 
-// tcpRun is an echo stream's raw observations; broke is set when the connection
+// TCPRun is an echo stream's raw observations; Broke is set when the connection
 // ended before the run did.
-type tcpRun struct {
-	stream
-	end   time.Time
-	broke error
+type TCPRun struct {
+	Stream
+	End   time.Time
+	Broke error
 }
 
-// runTCP pipelines PINGs on an admitted connection at offsets — it never waits for
-// a PONG before the next PING — and pairs PONGs by sequence number.
-func runTCP(ctx context.Context, conn net.Conn, offsets []time.Duration, tmax time.Duration) *tcpRun {
-	r := &tcpRun{}
+// RunTCP pipelines PINGs on an admitted connection at offsets until stop is closed
+// (nil: until the offsets run out) — it never waits for a PONG before the next
+// PING — and pairs PONGs by sequence number.
+func RunTCP(ctx context.Context, conn net.Conn, offsets []time.Duration, stop <-chan struct{}, tmax time.Duration) *TCPRun {
+	r := &TCPRun{}
 	var once sync.Once
-	broke := func(err error) { once.Do(func() { r.broke = err }) }
+	broke := func(err error) { once.Do(func() { r.Broke = err }) }
 	send := func(i int, now time.Time) error {
 		conn.SetWriteDeadline(now.Add(tmax))
 		err := protocol.WriteFrame(conn, protocol.Frame{Type: protocol.TypePing, Seq: uint64(i)})
@@ -87,7 +88,7 @@ func runTCP(ctx context.Context, conn net.Conn, offsets []time.Duration, tmax ti
 			}
 			switch f.Type {
 			case protocol.TypePong:
-				r.reply(f.Seq, reply{at: at})
+				r.add(f.Seq, Reply{At: at})
 			case protocol.TypeClose:
 				broke(fmt.Errorf("closed by the node: %s", f.Reason))
 				return
@@ -97,6 +98,6 @@ func runTCP(ctx context.Context, conn net.Conn, offsets []time.Duration, tmax ti
 			}
 		}
 	}
-	r.end = r.run(ctx, conn, offsets, tmax, send, read)
+	r.End = r.run(ctx, conn, offsets, stop, tmax, send, read)
 	return r
 }
