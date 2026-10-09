@@ -34,6 +34,8 @@ func TestDecodeJSONRejects(t *testing.T) {
 		"too many connections": strings.Replace(validRequest(), `"connections":100`, `"connections":1000001`, 1),
 		"negative duration":    strings.Replace(validRequest(), `"duration_s":0`, `"duration_s":-1`, 1),
 		"long version":         strings.Replace(validRequest(), `"version":"v0"`, `"version":"`+strings.Repeat("v", 65)+`"`, 1),
+		"load without conns":   strings.Replace(validRequest(), `"idle_timeout_s":60`, `"idle_timeout_s":60,"load_bytes":1000`, 1),
+		"negative load bytes":  strings.Replace(validRequest(), `"idle_timeout_s":60`, `"idle_timeout_s":60,"load_bytes":-1,"load_connections":1`, 1),
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -64,6 +66,10 @@ func TestSessionResponseValidate(t *testing.T) {
 		"negative load":         func(r *SessionResponse) { r.Node.Load.Sessions = -1 },
 		"zero ssid":             func(r *SessionResponse) { r.Stamp = &StampGrant{} },
 		"stamp rate too high":   func(r *SessionResponse) { r.Granted.StampRate = MaxStampRate + 1 },
+		"empty load grant":      func(r *SessionResponse) { r.Load = &LoadGrant{} },
+		"load without conns":    func(r *SessionResponse) { r.Load = &LoadGrant{Bytes: 1} },
+		"refused with a grant":  func(r *SessionResponse) { r.Load = &LoadGrant{Bytes: 1, Connections: 1, Refused: ErrReasonBusy} },
+		"unknown refusal":       func(r *SessionResponse) { r.Load = &LoadGrant{Refused: "later"} },
 	}
 	for name, mutate := range mutations {
 		t.Run(name, func(t *testing.T) {
@@ -73,6 +79,25 @@ func TestSessionResponseValidate(t *testing.T) {
 				t.Fatalf("accepted %s", name)
 			}
 		})
+	}
+	for _, g := range []LoadGrant{{Bytes: 1 << 30, Connections: 48}, {Refused: ErrReasonQuota, RetryAfterS: 3600}} {
+		r := ok
+		r.Load = &g
+		if err := r.Validate(); err != nil {
+			t.Errorf("load %+v rejected: %v", g, err)
+		}
+	}
+}
+
+func TestSessionEndValidate(t *testing.T) {
+	for _, tt := range []struct {
+		load *LoadCounts
+		ok   bool
+	}{{nil, true}, {&LoadCounts{Sent: 10, LagTicks: 5, LagOver: 5}, true}, {&LoadCounts{LagTicks: 1, LagOver: 2}, false}} {
+		e := SessionEnd{Load: tt.load}
+		if err := e.Validate(); (err == nil) != tt.ok {
+			t.Errorf("load %+v: %v", tt.load, err)
+		}
 	}
 }
 

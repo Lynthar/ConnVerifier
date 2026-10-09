@@ -17,13 +17,12 @@ type UDPRun struct {
 	SendErrors uint64
 }
 
-// RunUDP sends authenticated STAMP packets on conn at offsets until stop is closed
-// (nil: until the offsets run out) and reads the reflections. Replies that fail
-// authentication or name another session are ignored; they cannot be the node's
-// answer to this stream.
-func RunUDP(ctx context.Context, conn net.Conn, secret []byte, ssid uint16, offsets []time.Duration, stop <-chan struct{}, tmax time.Duration) *UDPRun {
+// Run sends authenticated STAMP packets on conn at offsets until stop is closed
+// (nil: until the offsets run out) and reads the reflections into r. Replies that
+// fail authentication or name another session are ignored; they cannot be the
+// node's answer to this stream. Only r's Stream may be read before Run returns.
+func (r *UDPRun) Run(ctx context.Context, conn net.Conn, secret []byte, ssid uint16, offsets []time.Duration, stop <-chan struct{}, tmax time.Duration) {
 	key := protocol.StampKey(secret)
-	r := &UDPRun{}
 	var sendErrors atomic.Uint64
 	send := func(i int, now time.Time) error {
 		b := protocol.StampSender{Seq: uint32(i), Timestamp: protocol.NTPTime(now), SSID: ssid}.Marshal(key)
@@ -56,7 +55,6 @@ func RunUDP(ctx context.Context, conn net.Conn, secret []byte, ssid uint16, offs
 	}
 	r.End = r.run(ctx, conn, offsets, stop, tmax, send, read)
 	r.SendErrors = sendErrors.Load()
-	return r
 }
 
 func isTimeout(err error) bool {

@@ -1,0 +1,109 @@
+TCP under load: goodput and responsiveness: attention (WARN)
+Node: 192.0.2.10:7443 · IPv4 · TCP
+Method version: 1
+Elapsed: 52.4 s
+Parameters
+  Interval for adding connections and testing stability: 1 s
+  Load connections per direction, max: 16
+  Method: draft-ietf-ippm-responsiveness-09
+  Moving average (intervals): 4
+  Most traffic per phase (MB): 500
+  Longest time per phase: 20 s
+  Responsiveness probe pairs per second, max: 20
+  Independent probe packets per second: 50
+  Stability tolerance (%): 5
+  Trimmed mean keeps (%): 95
+Reported by the node
+  Name: example
+  Version: v0.0.0-golden
+  This host's address as the node saw it: 198.51.100.7:51234
+  Granted: connections 1 · new per second 1 · length 1.37 min · idle 1 min · STAMP per second 100 · load 1.51 GB over 40 connections
+  Load traffic: sent 235 MB · received 171 MB · timer more than 10 ms late 3 of 5200 times
+  Load at start: sessions 1 · connections 0/20000
+  Load at end: sessions 0 · connections 0/20000
+Observed
+  Download · Goodput: 93.5 Mbit/s
+  Download · Goodput confidence: high
+  Download · Load connections: 12
+  Download · Load connections that did not open: 0
+  Download · Traffic: 131 MB
+  Download · Responsiveness: 812 RPM (160 samples)
+  Download · Responsiveness confidence: high
+  Download · Request on a load connection p50: 137 ms (80 samples)
+  Download · Request on a load connection p95: 164 ms (80 samples)
+  Download · Request on a new connection p50 (connect, TLS and request): 83 ms (80 samples)
+  Download · Request on a new connection p95: 101 ms (80 samples)
+  Download · Requests on a new connection that did not complete: 0
+  Download · UDP round trip p50: 170 ms (199 samples)
+  Download · UDP round trip p95: 190 ms (199 samples)
+  Download · UDP round trip p99: 190 ms (199 samples)
+  Download · UDP loss: 0.99% (95% interval 0.27–3.55%, samples: 201)
+  Download · UDP round trip p50, above idle: 139 ms (199 samples)
+  Download · UDP round trip p95, above idle: 155 ms (199 samples)
+  Download · TCP round trip p50: 170 ms (199 samples)
+  Download · TCP round trip p95: 190 ms (199 samples)
+  Download · TCP round trip p99: 190 ms (199 samples)
+  Download · TCP round trip p50, above idle: 138 ms (199 samples)
+  Download · TCP round trip p95, above idle: 154 ms (199 samples)
+  Upload · Goodput: 19.9 Mbit/s
+  Upload · Goodput confidence: high
+  Upload · Load connections: 9
+  Upload · Load connections that did not open: 0
+  Upload · Traffic: 29.9 MB
+  Upload · Wait before the phase for the queue to drain: 2.5 s
+  Upload · Responsiveness: 432 RPM (200 samples)
+  Upload · Responsiveness confidence: high
+  Upload · Request on a load connection p50: 275 ms (100 samples)
+  Upload · Request on a load connection p95: 320 ms (100 samples)
+  Upload · Request on a new connection p50 (connect, TLS and request): 122 ms (100 samples)
+  Upload · Request on a new connection p95: 149 ms (100 samples)
+  Upload · Requests on a new connection that did not complete: 0
+  Upload · UDP round trip p50: 170 ms (248 samples)
+  Upload · UDP round trip p95: 190 ms (248 samples)
+  Upload · UDP round trip p99: 190 ms (248 samples)
+  Upload · UDP loss: 1.2% (95% interval 0.41–3.45%, samples: 251)
+  Upload · UDP round trip p50, above idle: 139 ms (248 samples)
+  Upload · UDP round trip p95, above idle: 155 ms (248 samples)
+  Upload · TCP round trip p50: 170 ms (248 samples)
+  Upload · TCP round trip p95: 190 ms (248 samples)
+  Upload · TCP round trip p99: 190 ms (248 samples)
+  Upload · TCP round trip p50, above idle: 138 ms (248 samples)
+  Upload · TCP round trip p95, above idle: 154 ms (248 samples)
+  Both directions · Goodput, download: 71 Mbit/s
+  Both directions · Goodput, upload: 18.2 Mbit/s
+  Both directions · Goodput confidence: high
+  Both directions · Load connections: 26
+  Both directions · Load connections that did not open: 2
+  Both directions · Traffic: 246 MB
+  Both directions · Wait before the phase for the queue to drain: 10 s
+  Both directions · Responsiveness: 248 RPM (220 samples)
+  Both directions · Responsiveness confidence: medium
+  Both directions · Request on a load connection p50: 402 ms (110 samples)
+  Both directions · Request on a load connection p95: 474 ms (110 samples)
+  Both directions · Request on a new connection p50 (connect, TLS and request): 196 ms (110 samples)
+  Both directions · Request on a new connection p95: 232 ms (110 samples)
+  Both directions · Requests on a new connection that did not complete: 3
+  Both directions · UDP round trip p50: 170 ms (545 samples)
+  Both directions · UDP round trip p95: 190 ms (545 samples)
+  Both directions · UDP round trip p99: 190 ms (545 samples)
+  Both directions · UDP loss: 1.09% (95% interval 0.5–2.36%, samples: 551)
+  Both directions · UDP round trip p50, above idle: 139 ms (545 samples)
+  Both directions · UDP round trip p95, above idle: 155 ms (545 samples)
+  Both directions · TCP round trip p50: 170 ms (545 samples)
+  Both directions · TCP round trip p95: 190 ms (545 samples)
+  Both directions · TCP round trip p99: 190 ms (545 samples)
+  Both directions · TCP round trip p50, above idle: 138 ms (545 samples)
+  Both directions · TCP round trip p95, above idle: 154 ms (545 samples)
+  This host's 10 ms timer: wake-ups: 3600
+  This host's 10 ms timer: wake-ups more than 10 ms late: 3
+  Probes sent more than 10 ms late: 0
+  CPU this process used, of what it may use, in the busiest phase: 51%
+Inferred
+  - Both directions: 2 load connections did not open within 15 s; the phase went on with the rest. With the path loaded, even opening a connection was this slow.
+  - Both directions: responsiveness did not settle and may not reflect the full queue.
+  - Both directions: responsiveness 248 RPM, below 300 — round trips above 200 ms while the path is loaded, which the draft calls poor.
+Not proven
+  - Both directions: the previous phase's queue had not drained after 10 s, so this phase started on a fuller path.
+  - Both directions: 3 requests on a new connection did not complete and are left out of the responsiveness, which is therefore better than what the path delivered.
+  - Where the bottleneck is — this connection, the networks between, or the node's own uplink — is not determined.
+  - Other traffic on this host or network during the run was not checked; it shares the bottleneck with the load.

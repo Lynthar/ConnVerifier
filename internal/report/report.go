@@ -68,7 +68,7 @@ func writeCheck(b *strings.Builder, c result.Check, cat *i18n.Catalog) {
 
 	b.WriteString(cat.Text("section.metrics", nil) + "\n")
 	for _, m := range c.Metrics {
-		field("  ", cat.Text("metric."+m.ID, nil), metricText(cat, m))
+		field("  ", metricLabel(cat, m.ID), metricText(cat, m))
 	}
 
 	messages := func(section string, msgs []result.Message) {
@@ -88,19 +88,33 @@ func writeCheck(b *strings.Builder, c result.Check, cat *i18n.Catalog) {
 	}
 }
 
+// metricLabel names a metric. An ID scoped to a phase, such as "download.rpm", is
+// named by the scope and the unscoped metric, so each is translated once.
+func metricLabel(cat *i18n.Catalog, id string) string {
+	if scope, rest, ok := strings.Cut(id, "."); ok && !cat.Has("metric."+id) && cat.Has("scope."+scope) {
+		return cat.Text("line.scoped", map[string]any{"scope": cat.Text("scope."+scope, nil), "label": cat.Text("metric."+rest, nil)})
+	}
+	return cat.Text("metric."+id, nil)
+}
+
 // Message renders one message in cat's language, formatting its parameters the
 // same way as everywhere else in the report.
 func Message(cat *i18n.Catalog, m result.Message) string {
-	return cat.Text(m.Key, messageParams(m.Params))
+	return cat.Text(m.Key, messageParams(cat, m.Params))
 }
 
 // messageParams formats numeric "_ms" parameters as durations, the same way
 // parameters and metrics are shown, so messages do not print raw milliseconds.
-func messageParams(params map[string]any) map[string]any {
+// A "phase" or "why" parameter holds an identifier, shown in cat's language.
+func messageParams(cat *i18n.Catalog, params map[string]any) map[string]any {
 	out := make(map[string]any, len(params))
 	for name, v := range params {
 		if f, ok := number(v); ok && strings.HasSuffix(name, "_ms") {
 			out[name] = formatMs(f)
+			continue
+		}
+		if s, ok := v.(string); ok && (name == "phase" || name == "why") {
+			out[name] = cat.Text(map[string]string{"phase": "scope.", "why": "stop."}[name]+s, nil)
 			continue
 		}
 		out[name] = v
@@ -124,10 +138,19 @@ func writeNode(b *strings.Builder, field func(indent, label, value string), n *r
 		if g.StampRate > 0 {
 			stamp = cat.Text("node.grant_stamp", map[string]any{"rate": g.StampRate})
 		}
+		if g.LoadBytes > 0 {
+			stamp += cat.Text("node.grant_load", map[string]any{"bytes": formatBytes(float64(g.LoadBytes)), "connections": g.LoadConnections})
+		}
 		field("  ", cat.Text("node.granted", nil), Message(cat, result.Message{Key: "node.grant_value", Params: map[string]any{
 			"connections": g.Connections, "rate": g.DialRate,
 			"duration_ms": g.DurationS * 1000, "idle_ms": g.IdleTimeoutS * 1000, "stamp": stamp,
 		}}))
+	}
+	if tr := n.Traffic; tr != nil {
+		field("  ", cat.Text("node.traffic", nil), cat.Text("node.traffic_value", map[string]any{
+			"sent": formatBytes(float64(tr.SentBytes)), "received": formatBytes(float64(tr.ReceivedBytes)),
+			"over": tr.LagOver, "ticks": tr.LagTicks,
+		}))
 	}
 	for _, l := range []struct {
 		key  string
@@ -177,6 +200,14 @@ func metricText(cat *i18n.Catalog, m result.Metric) string {
 	}
 	var v string
 	switch m.Unit {
+	case result.UnitLevel:
+		return cat.Text("level."+strconv.Itoa(int(*m.Value)), nil)
+	case result.UnitMbps:
+		v = sig3(*m.Value) + " Mbit/s"
+	case result.UnitRPM:
+		v = strconv.FormatFloat(*m.Value, 'f', 0, 64) + " RPM"
+	case result.UnitBytes:
+		v = formatBytes(*m.Value)
 	case result.UnitMs:
 		v = formatMs(*m.Value)
 	case result.UnitPercent:
@@ -186,6 +217,9 @@ func metricText(cat *i18n.Catalog, m result.Metric) string {
 		}
 	default:
 		v = strconv.FormatFloat(*m.Value, 'f', -1, 64)
+	}
+	if m.AtLeast {
+		v = cat.Text("value.at_least", map[string]any{"value": v})
 	}
 	if m.Samples > 0 && m.Unit != result.UnitCount {
 		return cat.Text("value.with_samples", map[string]any{"value": v, "samples": m.Samples})
@@ -205,6 +239,21 @@ func formatMs(ms float64) string {
 		return sig3(ms/1000) + " s"
 	default:
 		return sig3(ms/60_000) + " min"
+	}
+}
+
+// formatBytes renders a byte count in decimal units (B, kB, MB, GB) with about
+// three significant digits.
+func formatBytes(n float64) string {
+	switch {
+	case n < 1e3:
+		return strconv.FormatFloat(n, 'f', 0, 64) + " B"
+	case n < 1e6:
+		return sig3(n/1e3) + " kB"
+	case n < 1e9:
+		return sig3(n/1e6) + " MB"
+	default:
+		return sig3(n/1e9) + " GB"
 	}
 }
 

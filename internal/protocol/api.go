@@ -14,6 +14,18 @@ import (
 // PathSessions is where sessions are created (POST) and ended (DELETE …/{id}).
 const PathSessions = "/v2/sessions"
 
+// Load endpoints, under PathSessions/{id}: GET LoadSmall answers 1 byte, GET
+// LoadLarge sends until the session's load budget is spent, POST LoadUpload
+// discards what it reads.
+const (
+	LoadSmall  = "/load/small"
+	LoadLarge  = "/load/large"
+	LoadUpload = "/load/upload"
+)
+
+// LoadPath is the path of a load endpoint of the session with the given ID.
+func LoadPath(sessionID, endpoint string) string { return PathSessions + "/" + sessionID + endpoint }
+
 // MaxBody bounds every control-plane request and response body.
 const MaxBody = 4096
 
@@ -21,6 +33,7 @@ const MaxBody = 4096
 const (
 	CheckTCPCapacity = "tcp-capacity"
 	CheckBaseline    = "baseline" // udp-baseline and tcp-baseline, side by side
+	CheckLoad        = "load"     // tcp-load: load endpoints, with STAMP and an echo connection beside them
 )
 
 // Error reasons in an ErrorResponse.
@@ -39,6 +52,8 @@ const (
 	MaxDurationS    = 7 * 24 * 3600
 	MaxIdleTimeoutS = 24 * 3600
 	MaxStampRate    = 10_000
+	MaxLoadBytes    = 1 << 40
+	MaxLoadConns    = 1024
 )
 
 const (
@@ -48,13 +63,16 @@ const (
 
 // Limits are what a session asks for (want) or is allowed (granted). In a request
 // DurationS 0 means "as long as the node allows"; granted values are never 0.
-// StampRate is STAMP packets per second, 0 when the session sends none.
+// StampRate is STAMP packets per second, 0 when the session sends none. LoadBytes
+// and LoadConnections are asked for only: a grant comes back as SessionResponse.Load.
 type Limits struct {
-	Connections  int `json:"connections"`
-	DialRate     int `json:"dial_rate"`
-	DurationS    int `json:"duration_s"`
-	IdleTimeoutS int `json:"idle_timeout_s"`
-	StampRate    int `json:"stamp_rate,omitempty"`
+	Connections     int   `json:"connections"`
+	DialRate        int   `json:"dial_rate"`
+	DurationS       int   `json:"duration_s"`
+	IdleTimeoutS    int   `json:"idle_timeout_s"`
+	StampRate       int   `json:"stamp_rate,omitempty"`
+	LoadBytes       int64 `json:"load_bytes,omitempty"`
+	LoadConnections int   `json:"load_connections,omitempty"`
 }
 
 func (l Limits) validate(granted bool) error {
@@ -73,6 +91,12 @@ func (l Limits) validate(granted bool) error {
 		return fmt.Errorf("idle_timeout_s must be 1 to %d", MaxIdleTimeoutS)
 	case l.StampRate < 0 || l.StampRate > MaxStampRate:
 		return fmt.Errorf("stamp_rate must be 0 to %d", MaxStampRate)
+	case l.LoadBytes < 0 || l.LoadBytes > MaxLoadBytes:
+		return fmt.Errorf("load_bytes must be 0 to %d", int64(MaxLoadBytes))
+	case l.LoadConnections < 0 || l.LoadConnections > MaxLoadConns:
+		return fmt.Errorf("load_connections must be 0 to %d", MaxLoadConns)
+	case l.LoadBytes > 0 && l.LoadConnections == 0:
+		return errors.New("load_bytes needs load_connections")
 	}
 	return nil
 }
@@ -129,6 +153,44 @@ type SessionResponse struct {
 	Granted      Limits      `json:"granted"`
 	Node         NodeInfo    `json:"node"`
 	Stamp        *StampGrant `json:"stamp,omitempty"`
+	Load         *LoadGrant  `json:"load,omitempty"`
+}
+
+// LoadGrant is a session's allowance on the load endpoints: Bytes is its budget
+// in both directions together, Connections how many load connections it may hold.
+// A node that offers load but cannot grant it now sets only Refused (ErrReasonBusy
+// or ErrReasonQuota) and RetryAfterS; a node that offers none omits the grant.
+type LoadGrant struct {
+	Bytes       int64  `json:"bytes,omitempty"`
+	Connections int    `json:"connections,omitempty"`
+	Refused     string `json:"refused,omitempty"`
+	RetryAfterS int    `json:"retry_after_s,omitempty"`
+}
+
+func (g *LoadGrant) validate() error {
+	switch g.Refused {
+	case "":
+		if g.Bytes < 1 || g.Bytes > MaxLoadBytes || g.Connections < 1 || g.Connections > MaxLoadConns {
+			return errors.New("load grant out of range")
+		}
+	case ErrReasonBusy, ErrReasonQuota:
+		if g.Bytes != 0 || g.Connections != 0 || g.RetryAfterS < 0 || g.RetryAfterS > 24*3600 {
+			return errors.New("refused load grant carries a grant")
+		}
+	default:
+		return errors.New("unknown load refusal")
+	}
+	return nil
+}
+
+// LoadCounts are what the node saw of a session's load: body bytes it sent and
+// received on the load endpoints, and how many times its 10 ms timer woke during
+// the session (LagTicks) and woke more than 10 ms late (LagOver).
+type LoadCounts struct {
+	Sent     uint64 `json:"sent"`
+	Received uint64 `json:"received"`
+	LagTicks uint64 `json:"lag_ticks"`
+	LagOver  uint64 `json:"lag_over"`
 }
 
 // StampGrant identifies a session's STAMP packets (RFC 8972 SSID); never 0.
@@ -163,6 +225,11 @@ func (r *SessionResponse) Validate() error {
 	if r.Stamp != nil && r.Stamp.SSID == 0 {
 		return errors.New("stamp: ssid must not be 0")
 	}
+	if r.Load != nil {
+		if err := r.Load.validate(); err != nil {
+			return err
+		}
+	}
 	return r.Node.validate()
 }
 
@@ -185,14 +252,21 @@ func DecodeID(s string) ([16]byte, error) {
 	return id, decodeFixed(s, id[:])
 }
 
-// SessionEnd answers DELETE on a session with the node's load at that moment, and
-// for a session that sent STAMP packets, what the reflector saw of them.
+// SessionEnd answers DELETE on a session with the node's load at that moment, for
+// a session that sent STAMP packets what the reflector saw of them, and for one
+// granted load what the load endpoints saw.
 type SessionEnd struct {
 	Node  NodeInfo     `json:"node"`
 	Stamp *StampCounts `json:"stamp,omitempty"`
+	Load  *LoadCounts  `json:"load,omitempty"`
 }
 
-func (r *SessionEnd) Validate() error { return r.Node.validate() }
+func (r *SessionEnd) Validate() error {
+	if r.Load != nil && r.Load.LagOver > r.Load.LagTicks {
+		return errors.New("load: lag_over above lag_ticks")
+	}
+	return r.Node.validate()
+}
 
 // ErrorResponse explains a refused request. Message is for the reader only and
 // never decides a status.

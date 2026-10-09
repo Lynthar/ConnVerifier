@@ -60,11 +60,11 @@ type TCPRun struct {
 	Broke error
 }
 
-// RunTCP pipelines PINGs on an admitted connection at offsets until stop is closed
+// Run pipelines PINGs on an admitted connection at offsets until stop is closed
 // (nil: until the offsets run out) — it never waits for a PONG before the next
-// PING — and pairs PONGs by sequence number.
-func RunTCP(ctx context.Context, conn net.Conn, offsets []time.Duration, stop <-chan struct{}, tmax time.Duration) *TCPRun {
-	r := &TCPRun{}
+// PING — and pairs PONGs by sequence number into r. Only r's Stream may be read
+// before Run returns.
+func (r *TCPRun) Run(ctx context.Context, conn net.Conn, offsets []time.Duration, stop <-chan struct{}, tmax time.Duration) {
 	var once sync.Once
 	broke := func(err error) { once.Do(func() { r.Broke = err }) }
 	send := func(i int, now time.Time) error {
@@ -99,5 +99,4 @@ func RunTCP(ctx context.Context, conn net.Conn, offsets []time.Duration, stop <-
 		}
 	}
 	r.End = r.run(ctx, conn, offsets, stop, tmax, send, read)
-	return r
 }

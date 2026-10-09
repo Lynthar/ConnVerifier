@@ -49,6 +49,12 @@ func keepAlivePeriod(d time.Duration) time.Duration {
 	return d
 }
 
+// SetNotSentLowat caps the data the kernel holds unsent for c at n bytes, so a
+// sender's own buffer does not add to the round trips it measures
+// (draft-ietf-ippm-responsiveness §6.1.1). It reports false where the platform
+// or the connection has no such option.
+func SetNotSentLowat(c net.Conn, n int) bool { return setNotSentLowat(c, n) }
+
 // WriteFull writes all of data to conn and returns the first error; a write that
 // makes no progress without an error is reported as io.ErrShortWrite.
 func WriteFull(conn net.Conn, data []byte) error {

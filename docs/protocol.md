@@ -53,9 +53,12 @@ Every request carries `Authorization: Bearer <token>`. Bodies are JSON of at mos
 }
 ```
 
-`check` is `tcp-capacity` or `baseline`. A `baseline` session may also ask for
-`stamp_rate`, STAMP packets per second; a node without a reflector, or a
-`tcp-capacity` session, is granted none.
+`check` is `tcp-capacity`, `baseline` or `load`. A `baseline` or `load` session may
+also ask for `stamp_rate`, STAMP packets per second; a node without a reflector,
+or a `tcp-capacity` session, is granted none. A `load` session also asks for
+`load_bytes`, its traffic on the load endpoints in both directions together, and
+`load_connections`, the load connections it may hold; other checks are granted no
+load.
 
 `duration_s` 0 asks for as long as the invite allows. The node grants each value
 up to the invite's limit: `connections`, `dial_rate` and `idle_timeout_s` are the
@@ -81,6 +84,14 @@ empty when unknown. A session granted a STAMP rate also carries
 limits are on **live** connections, not on how many a session opens over its
 lifetime.
 
+A `load` session's response carries `"load": {"bytes": N, "connections": N}`, each
+the smaller of asked and allowed, `bytes` also no more than what is left of the
+invite's daily load traffic. When the node offers load but cannot grant it now, the
+session is still created and `load` holds only `{"refused": "busy" | "quota",
+"retry_after_s": N}`: `busy` when another session holds the node's load slots,
+`quota` when the invite has used its daily traffic, retrying after the next UTC
+midnight. A node or invite that offers no load omits `load`.
+
 ### `DELETE /v2/sessions/{session_id}`
 
 Ends a session created with the same token. Its data-plane connections receive
@@ -88,7 +99,32 @@ Ends a session created with the same token. Its data-plane connections receive
 and for a session that had a STAMP grant,
 `"stamp": {"received": N, "over_rate": N, "other_addr": N}`: the authenticated
 packets the reflector answered, and those it dropped for exceeding the granted
-rate or for coming from another source address.
+rate or for coming from another source address. A session that had a load grant
+also gets `"load": {"sent": N, "received": N, "lag_ticks": N, "lag_over": N}`: the
+body bytes the load endpoints sent and received, and how often the node's 10 ms
+timer woke during the session and woke more than 10 ms late.
+
+### Load endpoints
+
+Under `/v2/sessions/{session_id}`, on the same TLS port. Each request carries the
+token of the invite that created the session, which must hold a live load grant;
+anything else is `404` with `bad_request`. These requests are not subject to the
+control plane's per-address request limit; failed ones are.
+
+| Request | Answer |
+|---|---|
+| `GET …/load/small` | `200`, one byte, `application/octet-stream`; at most 200 a second per session |
+| `GET …/load/large` | `200`, `application/octet-stream`, sent until the session's load budget is spent, then ended normally |
+| `POST …/load/upload` | `200` at once; the body is read and discarded, and the response carries 8-byte big-endian totals of body bytes read so far — one at once, then one at least every 50 ms while reading, and a last one when the body ends. Once the budget is spent the node stops reading and the response ends before the body does |
+
+Every body byte in either direction counts against `load_bytes`. The node serves
+no `/.well-known/nq` configuration (draft-ietf-ippm-responsiveness §8.1): its
+endpoints belong to invited sessions. So that load does not delay the probes
+that share its connections, the node's HTTP/2 interleaves streams instead of
+serving them one after another, advertises the smallest frame size (16 KiB),
+writes downloads one frame at a time, and on Linux and macOS keeps at most 5 ms of
+a download's throughput unsent in the kernel. Its receive window is 16 MiB per
+stream and per connection.
 
 ### Refusals
 
@@ -187,6 +223,10 @@ request.
 | Session length | 24 h | `invite create -max-duration` |
 | Idle period a session may ask for | 1 h | `invite create -max-idle` |
 | STAMP packets per second per session | 100 | `invite create -max-stamp-rate` |
-| Connections not yet past TLS or HELLO | 32 per address, 1 024 in total | fixed |
-| Open control-plane connections | 8 per address, 512 in total | fixed |
-| Control-plane requests | 10 per second per address | fixed |
+| Sessions with load at once on the node | 1 (0: no load offered) | `serve -max-load-sessions` |
+| Load traffic per session | 2 000 MB (0: no load) | `invite create -max-load-mb` |
+| Load traffic per invite per UTC day, counted in memory and reset when the node restarts | 20 000 MB | `invite create -max-load-mb-per-day` |
+| Load connections per session | 48 | `invite create -max-load-connections` |
+| Connections not yet past TLS or HELLO | 32 per address, 1 024 in total, plus the load connections of the address's live load sessions | fixed |
+| Open control-plane connections | 8 per address, 512 in total, plus the same | fixed |
+| Control-plane requests | 10 per second per address; load requests of a live load session are not counted | fixed |

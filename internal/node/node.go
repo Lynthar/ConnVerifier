@@ -33,12 +33,13 @@ const (
 )
 
 type Config struct {
-	listen         string
-	listenUDP      string // "" means the same address as listen
-	stateDir       string
-	maxConns       int
-	maxSessions    int
-	logConnections bool
+	listen          string
+	listenUDP       string // "" means the same address as listen
+	stateDir        string
+	maxConns        int
+	maxSessions     int
+	maxLoadSessions int
+	logConnections  bool
 }
 
 // RegisterFlags binds cfg to fs under the command-line names and defaults.
@@ -48,6 +49,7 @@ func (cfg *Config) RegisterFlags(fs *flag.FlagSet) {
 	fs.StringVar(&cfg.stateDir, "state-dir", DefaultStateDir(), "directory holding the node key and invites")
 	fs.IntVar(&cfg.maxConns, "max-conns", 20000, "live data-plane connections across all sessions")
 	fs.IntVar(&cfg.maxSessions, "max-sessions", 64, "sessions across all invites")
+	fs.IntVar(&cfg.maxLoadSessions, "max-load-sessions", 1, "sessions running the load check at once (0: offer no load); more than one share this node's bandwidth")
 	fs.BoolVar(&cfg.logConnections, "log-connections", false, "log each session with its invite label and client address")
 }
 
@@ -62,12 +64,14 @@ func (cfg Config) Validate() error {
 		return fmt.Errorf("max-conns must be 1 to %d", protocol.MaxConnections)
 	case cfg.maxSessions < 1:
 		return errors.New("max-sessions must be positive")
+	case cfg.maxLoadSessions < 0:
+		return errors.New("max-load-sessions must not be negative")
 	}
 	return nil
 }
 
 type counters struct {
-	rejectedBusy, rejectedQuota, rejectedAuth, rejectedVersion, refusedPending atomic.Uint64
+	rejectedBusy, rejectedQuota, rejectedAuth, rejectedVersion, refusedPending, refusedHTTP atomic.Uint64
 }
 
 type server struct {
@@ -141,7 +145,7 @@ func newServer(cfg Config, version string, cert tls.Certificate, udp bool) *serv
 		cfg:       cfg,
 		version:   version,
 		tls:       protocol.ServerTLS(cert),
-		store:     newStore(cfg.maxConns, cfg.maxSessions, now),
+		store:     newStore(cfg.maxConns, cfg.maxSessions, cfg.maxLoadSessions, now),
 		pending:   newPending(maxPendingPerIP, maxPendingTotal),
 		httpConns: newPending(maxHTTPPerIP, maxHTTPTotal),
 		requests:  newRequestLimiter(requestRate),
@@ -160,12 +164,15 @@ func (s *server) serve(ctx context.Context, ln net.Listener, pc net.PacketConn) 
 		WriteTimeout:      handshakeTimeout,
 		IdleTimeout:       time.Minute,
 		MaxHeaderBytes:    8 << 10,
+		HTTP2:             &http.HTTP2Config{MaxReceiveBufferPerConnection: h2ReceiveSize, MaxReceiveBufferPerStream: h2ReceiveSize, MaxReadFrameSize: h2MaxFrame},
+		ConnContext:       func(ctx context.Context, c net.Conn) context.Context { return context.WithValue(ctx, connKey{}, c) },
 		ConnState: func(c net.Conn, st http.ConnState) {
 			if st == http.StateClosed || st == http.StateHijacked {
 				s.httpConns.release(remoteIP(c))
 			}
 		},
 	}
+	roundRobin(hs)
 	s.wg.Add(3)
 	go func() { defer s.wg.Done(); hs.Serve(httpLn) }()
 	go func() { defer s.wg.Done(); s.expireLoop(ctx) }()
@@ -188,7 +195,7 @@ func (s *server) serve(ctx context.Context, ln net.Listener, pc net.PacketConn) 
 			continue
 		}
 		addr := remoteIP(conn)
-		if !s.pending.acquire(addr) {
+		if !s.pending.acquire(addr, s.store.loadAllowance(addr)) {
 			s.stats.refusedPending.Add(1)
 			conn.Close()
 			continue
@@ -233,9 +240,9 @@ func (s *server) statsLoop(ctx context.Context) {
 			return
 		case <-t.C:
 			l := s.store.load()
-			log.Printf("stats sessions=%d connections=%d rejected_busy=%d rejected_quota=%d rejected_auth=%d refused_unauthenticated=%d",
+			log.Printf("stats sessions=%d connections=%d rejected_busy=%d rejected_quota=%d rejected_auth=%d refused_unauthenticated=%d refused_https=%d",
 				l.Sessions, l.Connections, s.stats.rejectedBusy.Load(), s.stats.rejectedQuota.Load(),
-				s.stats.rejectedAuth.Load(), s.stats.refusedPending.Load())
+				s.stats.rejectedAuth.Load(), s.stats.refusedPending.Load(), s.stats.refusedHTTP.Load())
 		}
 	}
 }

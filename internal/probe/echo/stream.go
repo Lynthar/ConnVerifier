@@ -38,12 +38,28 @@ func (s *Stream) add(i uint64, r Reply) {
 	s.Probes[i].Replies = append(s.Probes[i].Replies, r)
 }
 
+// RTTs returns the round trips, to the first reply, of the probes sent at or
+// after since that have one. It may be called while the stream runs.
+func (s *Stream) RTTs(since time.Time) []time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var d []time.Duration
+	for _, p := range s.Probes {
+		if !p.Sent.IsZero() && !p.Sent.Before(since) && len(p.Replies) > 0 {
+			d = append(d, p.Replies[0].At.Sub(p.Sent))
+		}
+	}
+	return d
+}
+
 // run sends one probe per offset until stop is closed, waits tmax after the last,
 // then stops read by moving conn's read deadline to now — once, so no later
 // deadline can undo it. ctx, a send error or the reader end it at once. It drops
 // probes that never left and returns when it stopped.
 func (s *Stream) run(ctx context.Context, conn net.Conn, offsets []time.Duration, stop <-chan struct{}, tmax time.Duration, send func(i int, now time.Time) error, read func()) time.Time {
+	s.mu.Lock()
 	s.Probes = make([]Probe, len(offsets))
+	s.mu.Unlock()
 	readerDone := make(chan struct{})
 	go func() { defer close(readerDone); read() }()
 

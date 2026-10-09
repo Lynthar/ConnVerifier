@@ -17,6 +17,7 @@ const tlsHandshakeRecord = 0x16
 
 // pending counts connections per source address against a limit: unproven ones
 // (accept to TLS handshake or HELLO) and, separately, open control connections.
+// An address with a load grant may go over both limits by its allowance.
 type pending struct {
 	mu              sync.Mutex
 	perIP           map[netip.Addr]int
@@ -28,10 +29,10 @@ func newPending(maxPerIP, limit int) *pending {
 	return &pending{perIP: make(map[netip.Addr]int), maxPerIP: maxPerIP, limit: limit}
 }
 
-func (p *pending) acquire(a netip.Addr) bool {
+func (p *pending) acquire(a netip.Addr, allowance int) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.perIP[a] >= p.maxPerIP || p.total >= p.limit {
+	if p.perIP[a] >= p.maxPerIP+allowance || p.total >= p.limit+allowance {
 		return false
 	}
 	p.perIP[a]++
@@ -81,7 +82,8 @@ func (s *server) route(ctx context.Context, conn net.Conn, addr netip.Addr, http
 			return
 		}
 		release()
-		if !s.httpConns.acquire(addr) {
+		if !s.httpConns.acquire(addr, s.store.loadAllowance(addr)) {
+			s.stats.refusedHTTP.Add(1)
 			conn.Close()
 			return
 		}

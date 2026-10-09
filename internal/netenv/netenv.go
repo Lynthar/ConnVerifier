@@ -2,6 +2,8 @@
 // A fact the platform cannot provide is reported as unknown, never guessed.
 package netenv
 
+import "time"
+
 // FDLimit returns the process's current open-file limit. The Go runtime raises
 // the soft limit to the hard limit at startup, so this is the effective value.
 func FDLimit() (limit uint64, ok bool) {
@@ -17,3 +19,6 @@ func FDLimit() (limit uint64, ok bool) {
 func EphemeralPorts() (int, bool) {
 	return ephemeralPorts()
 }
+
+// ProcessCPU returns the CPU time this process has used, user and system together.
+func ProcessCPU() (time.Duration, bool) { return processCPU() }

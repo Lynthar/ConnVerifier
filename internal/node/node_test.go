@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -35,7 +36,7 @@ func testServer(t *testing.T, maxConns int) (*server, protocol.Invite) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{listen: ":0", stateDir: dir, maxConns: maxConns, maxSessions: 4}
+	cfg := Config{listen: ":0", stateDir: dir, maxConns: maxConns, maxSessions: 4, maxLoadSessions: 1}
 	return newServer(cfg, "vtest", cert, false), inv
 }
 
@@ -125,10 +126,10 @@ func TestStateRefusesFilesOthersCanRead(t *testing.T) {
 
 func TestStoreGrantsAndSessionLimits(t *testing.T) {
 	now := time.Now()
-	st := newStore(100, 3, now)
+	st := newStore(100, 3, 1, now)
 	lim := DefaultInviteLimits
 	lim.MaxSessions, lim.MaxConnections = 2, 50
-	sess, reason := st.create("inv-a", lim, protocol.Limits{Connections: 80, DialRate: 5, IdleTimeoutS: 7200}, now)
+	sess, reason := st.create("inv-a", lim, protocol.Limits{Connections: 80, DialRate: 5, IdleTimeoutS: 7200}, netip.Addr{}, now)
 	if reason != "" {
 		t.Fatalf("create = %q", reason)
 	}
@@ -136,24 +137,24 @@ func TestStoreGrantsAndSessionLimits(t *testing.T) {
 	if g.Connections != 50 || g.DialRate != 5 || g.IdleTimeoutS != lim.MaxIdleTimeoutS || g.DurationS != lim.MaxDurationS {
 		t.Fatalf("granted %+v", g)
 	}
-	if _, reason := st.create("inv-a", lim, want(1), now); reason != "" {
+	if _, reason := st.create("inv-a", lim, want(1), netip.Addr{}, now); reason != "" {
 		t.Fatalf("second session = %q", reason)
 	}
-	if _, reason := st.create("inv-a", lim, want(1), now); reason != protocol.ErrReasonQuota {
+	if _, reason := st.create("inv-a", lim, want(1), netip.Addr{}, now); reason != protocol.ErrReasonQuota {
 		t.Fatalf("third session for one invite = %q, want quota", reason)
 	}
-	if _, reason := st.create("inv-b", lim, want(1), now); reason != "" {
+	if _, reason := st.create("inv-b", lim, want(1), netip.Addr{}, now); reason != "" {
 		t.Fatalf("other invite = %q", reason)
 	}
-	if _, reason := st.create("inv-c", lim, want(1), now); reason != protocol.ErrReasonBusy {
+	if _, reason := st.create("inv-c", lim, want(1), netip.Addr{}, now); reason != protocol.ErrReasonBusy {
 		t.Fatalf("over node session limit = %q, want busy", reason)
 	}
 }
 
 func TestAdmit(t *testing.T) {
 	now := time.Now()
-	st := newStore(2, 4, now)
-	sess, _ := st.create("inv", DefaultInviteLimits, want(1), now)
+	st := newStore(2, 4, 1, now)
+	sess, _ := st.create("inv", DefaultInviteLimits, want(1), netip.Addr{}, now)
 	hello := func(secret []byte) protocol.Hello {
 		return protocol.NewHello(secret, sess.id, [16]byte{byte(time.Now().UnixNano())})
 	}
@@ -170,7 +171,7 @@ func TestAdmit(t *testing.T) {
 	if l := st.load(); l.Connections != 1 {
 		t.Fatalf("rejected connection counted: %d live", l.Connections)
 	}
-	other, _ := st.create("inv2", DefaultInviteLimits, want(5), now)
+	other, _ := st.create("inv2", DefaultInviteLimits, want(5), netip.Addr{}, now)
 	st.admit(protocol.NewHello(other.secret, other.id, [16]byte{1}), &dataConn{}, now)
 	if r := st.admit(protocol.NewHello(other.secret, other.id, [16]byte{2}), &dataConn{}, now); r != protocol.ReasonBusy {
 		t.Fatalf("over node connections = %v, want busy", r)
@@ -187,8 +188,8 @@ func TestAdmit(t *testing.T) {
 // A HELLO racing the shutdown hears shutting_down, not auth, and no session opens.
 func TestStoreCloseRefusesWithShuttingDown(t *testing.T) {
 	now := time.Now()
-	st := newStore(10, 4, now)
-	sess, _ := st.create("inv", DefaultInviteLimits, want(2), now)
+	st := newStore(10, 4, 1, now)
+	sess, _ := st.create("inv", DefaultInviteLimits, want(2), netip.Addr{}, now)
 	c := &dataConn{}
 	st.admit(protocol.NewHello(sess.secret, sess.id, [16]byte{1}), c, now)
 	if conns := st.close(); len(conns) != 1 || conns[0] != c {
@@ -197,7 +198,7 @@ func TestStoreCloseRefusesWithShuttingDown(t *testing.T) {
 	if r := st.admit(protocol.NewHello(sess.secret, sess.id, [16]byte{2}), &dataConn{}, now); r != protocol.ReasonShuttingDown {
 		t.Fatalf("HELLO during shutdown = %v, want shutting_down", r)
 	}
-	if _, reason := st.create("inv", DefaultInviteLimits, want(1), now); reason != protocol.ErrReasonBusy {
+	if _, reason := st.create("inv", DefaultInviteLimits, want(1), netip.Addr{}, now); reason != protocol.ErrReasonBusy {
 		t.Fatalf("session during shutdown = %q, want busy", reason)
 	}
 	if l := st.load(); l.Sessions != 0 || l.Connections != 0 {
@@ -232,7 +233,7 @@ func readFrame(t *testing.T, c net.Conn, want protocol.FrameType) protocol.Frame
 
 func TestDataPlaneEchoAndSessionEnd(t *testing.T) {
 	s, inv := testServer(t, 10)
-	sess, _ := s.store.create(tokenHash(inv.Token[:]), DefaultInviteLimits, want(5), time.Now())
+	sess, _ := s.store.create(tokenHash(inv.Token[:]), DefaultInviteLimits, want(5), netip.Addr{}, time.Now())
 	client, done := dataPipe(t, s, sess)
 	defer client.Close()
 
@@ -262,7 +263,7 @@ func TestDataPlaneIdleTimeoutSaysWhy(t *testing.T) {
 	s, inv := testServer(t, 10)
 	w := want(5)
 	w.IdleTimeoutS = 1
-	sess, _ := s.store.create(tokenHash(inv.Token[:]), DefaultInviteLimits, w, time.Now())
+	sess, _ := s.store.create(tokenHash(inv.Token[:]), DefaultInviteLimits, w, netip.Addr{}, time.Now())
 	client, _ := dataPipe(t, s, sess)
 	defer client.Close()
 	readFrame(t, client, protocol.TypeAccept)
@@ -273,7 +274,7 @@ func TestDataPlaneIdleTimeoutSaysWhy(t *testing.T) {
 
 func TestDataPlaneRejectsWithReason(t *testing.T) {
 	s, inv := testServer(t, 10)
-	sess, _ := s.store.create(tokenHash(inv.Token[:]), DefaultInviteLimits, want(1), time.Now())
+	sess, _ := s.store.create(tokenHash(inv.Token[:]), DefaultInviteLimits, want(1), netip.Addr{}, time.Now())
 	first, _ := dataPipe(t, s, sess)
 	defer first.Close()
 	readFrame(t, first, protocol.TypeAccept)
@@ -312,7 +313,7 @@ func TestServeRoutesByFirstByte(t *testing.T) {
 	}
 	tc.Close()
 
-	sess, _ := s.store.create(tokenHash(inv.Token[:]), DefaultInviteLimits, want(1), time.Now())
+	sess, _ := s.store.create(tokenHash(inv.Token[:]), DefaultInviteLimits, want(1), netip.Addr{}, time.Now())
 	data := dial()
 	data.Write(protocol.NewHello(sess.secret, sess.id, [16]byte{3}).MarshalBinary())
 	readFrame(t, data, protocol.TypeAccept)

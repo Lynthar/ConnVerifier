@@ -24,3 +24,13 @@ func TestFormatMs(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatBytes(t *testing.T) {
+	for n, want := range map[float64]string{
+		0: "0 B", 999: "999 B", 1500: "1.5 kB", 500e6: "500 MB", 1.5e9: "1.5 GB", 20e9: "20 GB",
+	} {
+		if got := formatBytes(n); got != want {
+			t.Errorf("formatBytes(%v) = %q, want %q", n, got, want)
+		}
+	}
+}

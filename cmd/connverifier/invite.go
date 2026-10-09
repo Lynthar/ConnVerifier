@@ -39,6 +39,7 @@ func runInvite(args []string) {
 		lim                   = node.DefaultInviteLimits
 		maxDuration, maxIdle  time.Duration
 		udpPort               int
+		loadMB, loadDayMB     = lim.MaxLoadBytes / 1e6, lim.MaxLoadBytesPerDay / 1e6
 	)
 	register := func(fs *flag.FlagSet) {
 		fs.StringVar(&stateDir, "state-dir", node.DefaultStateDir(), "node state directory")
@@ -55,6 +56,9 @@ func runInvite(args []string) {
 			fs.DurationVar(&maxIdle, "max-idle", time.Duration(lim.MaxIdleTimeoutS)*time.Second, "longest idle period a session may ask for")
 			fs.IntVar(&lim.MaxStampRate, "max-stamp-rate", lim.MaxStampRate, "STAMP packets per second per session (0: no UDP checks)")
 			fs.IntVar(&udpPort, "udp-port", 0, "UDP port of the node's STAMP reflector (default: the first -addr's port)")
+			fs.Int64Var(&loadMB, "max-load-mb", loadMB, "load check traffic per session, both directions, in MB (0: no load check)")
+			fs.Int64Var(&loadDayMB, "max-load-mb-per-day", loadDayMB, "load check traffic per UTC day for this invite, in MB; counted in memory, reset when the node restarts")
+			fs.IntVar(&lim.MaxLoadConnections, "max-load-connections", lim.MaxLoadConnections, "load and probe connections per session")
 		}
 	}
 	switch sub {
@@ -77,6 +81,7 @@ func runInvite(args []string) {
 		}
 		lim.MaxDurationS = int(maxDuration / time.Second)
 		lim.MaxIdleTimeoutS = int(maxIdle / time.Second)
+		lim.MaxLoadBytes, lim.MaxLoadBytesPerDay = loadMB*1e6, loadDayMB*1e6
 		if udpPort == 0 && lim.MaxStampRate > 0 {
 			_, port, err := net.SplitHostPort(addrs[0])
 			invalidIf(err)
@@ -100,7 +105,8 @@ func runInvite(args []string) {
 				"label": r.Label, "created": r.Created.Format(time.DateOnly),
 				"sessions": r.Limits.MaxSessions, "connections": r.Limits.MaxConnections,
 				"rate": r.Limits.MaxDialRate, "duration": shortDuration(r.Limits.MaxDurationS),
-				"idle": shortDuration(r.Limits.MaxIdleTimeoutS),
+				"idle":    shortDuration(r.Limits.MaxIdleTimeoutS),
+				"load_mb": r.Limits.MaxLoadBytes / 1e6, "load_day_mb": r.Limits.MaxLoadBytesPerDay / 1e6,
 			}))
 		}
 	case "revoke":

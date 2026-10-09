@@ -67,6 +67,11 @@ func (cfg Config) Validate() error {
 	return nil
 }
 
+// Shared returns the settings the load check takes from these flags.
+func (cfg Config) Shared() (node string, rate int, dialTimeout time.Duration) {
+	return cfg.node, cfg.rate, cfg.dialTimeout
+}
+
 func (cfg Config) packets() int { return int(math.Round(float64(cfg.rate) * cfg.duration.Seconds())) }
 
 func (cfg Config) want() protocol.Limits {
@@ -167,7 +172,8 @@ func Run(ctx context.Context, cfg Config, version string) ([]result.Check, error
 		}
 		wg.Go(func() {
 			defer conn.Close()
-			ur = echo.RunUDP(ctx, conn, sess.Secret, sess.Resp.Stamp.SSID, echo.Schedule(cfg.packets(), cfg.duration, newRand()), nil, cfg.tmax)
+			ur = &echo.UDPRun{}
+			ur.Run(ctx, conn, sess.Secret, sess.Resp.Stamp.SSID, echo.Schedule(cfg.packets(), cfg.duration, newRand()), nil, cfg.tmax)
 		})
 	}
 	wg.Go(func() {
@@ -177,7 +183,8 @@ func Run(ctx context.Context, cfg Config, version string) ([]result.Check, error
 			return
 		}
 		defer conn.Close()
-		tr = echo.RunTCP(ctx, conn, echo.Schedule(cfg.packets(), cfg.duration, newRand()), nil, cfg.tmax)
+		tr = &echo.TCPRun{}
+		tr.Run(ctx, conn, echo.Schedule(cfg.packets(), cfg.duration, newRand()), nil, cfg.tmax)
 	})
 	wg.Wait()
 	end := sess.End() // after both streams stopped, so nothing is in flight

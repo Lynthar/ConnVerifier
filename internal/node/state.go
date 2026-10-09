@@ -42,12 +42,18 @@ type InviteLimits struct {
 	MaxDurationS    int `json:"max_duration_s"`
 	MaxIdleTimeoutS int `json:"max_idle_timeout_s"`
 	MaxStampRate    int `json:"max_stamp_rate"` // 0: no STAMP, as for invites made before it existed
+	// Load budgets count body bytes in both directions; MaxLoadBytes 0 means no
+	// load, as for invites made before it existed.
+	MaxLoadBytes       int64 `json:"max_load_bytes"`
+	MaxLoadBytesPerDay int64 `json:"max_load_bytes_per_day"`
+	MaxLoadConnections int   `json:"max_load_connections"`
 }
 
 // DefaultInviteLimits are the per-invite caps when invite create is not told others.
 var DefaultInviteLimits = InviteLimits{
 	MaxSessions: 2, MaxConnections: 20000, MaxDialRate: 1000,
 	MaxDurationS: 24 * 3600, MaxIdleTimeoutS: 3600, MaxStampRate: 100,
+	MaxLoadBytes: 2_000_000_000, MaxLoadBytesPerDay: 20_000_000_000, MaxLoadConnections: 48,
 }
 
 func (l InviteLimits) Validate() error {
@@ -64,6 +70,12 @@ func (l InviteLimits) Validate() error {
 		return fmt.Errorf("max idle timeout must be 1s to %ds", protocol.MaxIdleTimeoutS)
 	case l.MaxStampRate < 0 || l.MaxStampRate > protocol.MaxStampRate:
 		return fmt.Errorf("max STAMP rate must be 0 to %d", protocol.MaxStampRate)
+	case l.MaxLoadBytes < 0 || l.MaxLoadBytes > protocol.MaxLoadBytes:
+		return fmt.Errorf("max load bytes must be 0 to %d", int64(protocol.MaxLoadBytes))
+	case l.MaxLoadBytes > 0 && l.MaxLoadBytesPerDay < 1:
+		return errors.New("max load bytes per day must be positive when load is allowed")
+	case l.MaxLoadBytes > 0 && (l.MaxLoadConnections < 1 || l.MaxLoadConnections > protocol.MaxLoadConns):
+		return fmt.Errorf("max load connections must be 1 to %d", protocol.MaxLoadConns)
 	}
 	return nil
 }

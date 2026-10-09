@@ -1,0 +1,567 @@
+{
+  "schema": "connverifier.result/v0",
+  "tool": {
+    "name": "connverifier",
+    "version": "v0.0.0-golden",
+    "go": "go1.27.0",
+    "os": "linux",
+    "arch": "amd64"
+  },
+  "run_id": "golden",
+  "started": "2026-01-01T00:00:00Z",
+  "ended": "2026-01-01T00:00:52.4Z",
+  "elapsed_ms": 52400,
+  "checks": [
+    {
+      "id": "tcp-load",
+      "method_version": 1,
+      "status": "WARN",
+      "path": {
+        "node": "192.0.2.10:7443",
+        "family": "ipv4",
+        "protocol": "tcp"
+      },
+      "params": {
+        "interval_ms": 1000,
+        "max_connections": 16,
+        "method": "draft-ietf-ippm-responsiveness-09",
+        "moving_average": 4,
+        "phase_mb": 500,
+        "phase_time_ms": 20000,
+        "probe_pairs_per_s": 20,
+        "probe_rate_per_s": 50,
+        "tolerance_percent": 5,
+        "trimmed_mean_keeps": 95
+      },
+      "elapsed_ms": 52400,
+      "metrics": [
+        {
+          "id": "download.goodput",
+          "unit": "Mbit/s",
+          "value": 93.456
+        },
+        {
+          "id": "download.goodput.confidence",
+          "unit": "level",
+          "value": 3
+        },
+        {
+          "id": "download.connections",
+          "unit": "count",
+          "value": 12
+        },
+        {
+          "id": "download.connect_failures",
+          "unit": "count",
+          "value": 0
+        },
+        {
+          "id": "download.bytes",
+          "unit": "B",
+          "value": 131234567
+        },
+        {
+          "id": "download.rpm",
+          "unit": "RPM",
+          "value": 812,
+          "samples": 160
+        },
+        {
+          "id": "download.rpm.confidence",
+          "unit": "level",
+          "value": 3
+        },
+        {
+          "id": "download.self.p50",
+          "unit": "ms",
+          "value": 137,
+          "samples": 80
+        },
+        {
+          "id": "download.self.p95",
+          "unit": "ms",
+          "value": 164,
+          "samples": 80
+        },
+        {
+          "id": "download.foreign.p50",
+          "unit": "ms",
+          "value": 83,
+          "samples": 80
+        },
+        {
+          "id": "download.foreign.p95",
+          "unit": "ms",
+          "value": 101,
+          "samples": 80
+        },
+        {
+          "id": "download.foreign.failed",
+          "unit": "count",
+          "value": 0
+        },
+        {
+          "id": "download.udp.rtt.p50",
+          "unit": "ms",
+          "value": 170,
+          "samples": 199
+        },
+        {
+          "id": "download.udp.rtt.p95",
+          "unit": "ms",
+          "value": 190,
+          "samples": 199
+        },
+        {
+          "id": "download.udp.rtt.p99",
+          "unit": "ms",
+          "value": 190,
+          "samples": 199
+        },
+        {
+          "id": "download.udp.loss",
+          "unit": "%",
+          "value": 0.995,
+          "low": 0.2733,
+          "high": 3.5548,
+          "samples": 201
+        },
+        {
+          "id": "download.udp.rtt.p50.increase",
+          "unit": "ms",
+          "value": 138.8,
+          "samples": 199
+        },
+        {
+          "id": "download.udp.rtt.p95.increase",
+          "unit": "ms",
+          "value": 154.6,
+          "samples": 199
+        },
+        {
+          "id": "download.tcp.rtt.p50",
+          "unit": "ms",
+          "value": 170,
+          "samples": 199
+        },
+        {
+          "id": "download.tcp.rtt.p95",
+          "unit": "ms",
+          "value": 190,
+          "samples": 199
+        },
+        {
+          "id": "download.tcp.rtt.p99",
+          "unit": "ms",
+          "value": 190,
+          "samples": 199
+        },
+        {
+          "id": "download.tcp.rtt.p50.increase",
+          "unit": "ms",
+          "value": 138.5,
+          "samples": 199
+        },
+        {
+          "id": "download.tcp.rtt.p95.increase",
+          "unit": "ms",
+          "value": 153.9,
+          "samples": 199
+        },
+        {
+          "id": "upload.goodput",
+          "unit": "Mbit/s",
+          "value": 19.876
+        },
+        {
+          "id": "upload.goodput.confidence",
+          "unit": "level",
+          "value": 3
+        },
+        {
+          "id": "upload.connections",
+          "unit": "count",
+          "value": 9
+        },
+        {
+          "id": "upload.connect_failures",
+          "unit": "count",
+          "value": 0
+        },
+        {
+          "id": "upload.bytes",
+          "unit": "B",
+          "value": 29876543
+        },
+        {
+          "id": "upload.wait",
+          "unit": "ms",
+          "value": 2500
+        },
+        {
+          "id": "upload.rpm",
+          "unit": "RPM",
+          "value": 432,
+          "samples": 200
+        },
+        {
+          "id": "upload.rpm.confidence",
+          "unit": "level",
+          "value": 3
+        },
+        {
+          "id": "upload.self.p50",
+          "unit": "ms",
+          "value": 275,
+          "samples": 100
+        },
+        {
+          "id": "upload.self.p95",
+          "unit": "ms",
+          "value": 320,
+          "samples": 100
+        },
+        {
+          "id": "upload.foreign.p50",
+          "unit": "ms",
+          "value": 122,
+          "samples": 100
+        },
+        {
+          "id": "upload.foreign.p95",
+          "unit": "ms",
+          "value": 149,
+          "samples": 100
+        },
+        {
+          "id": "upload.foreign.failed",
+          "unit": "count",
+          "value": 0
+        },
+        {
+          "id": "upload.udp.rtt.p50",
+          "unit": "ms",
+          "value": 170,
+          "samples": 248
+        },
+        {
+          "id": "upload.udp.rtt.p95",
+          "unit": "ms",
+          "value": 190,
+          "samples": 248
+        },
+        {
+          "id": "upload.udp.rtt.p99",
+          "unit": "ms",
+          "value": 190,
+          "samples": 248
+        },
+        {
+          "id": "upload.udp.loss",
+          "unit": "%",
+          "value": 1.1952,
+          "low": 0.4073,
+          "high": 3.4545,
+          "samples": 251
+        },
+        {
+          "id": "upload.udp.rtt.p50.increase",
+          "unit": "ms",
+          "value": 138.8,
+          "samples": 248
+        },
+        {
+          "id": "upload.udp.rtt.p95.increase",
+          "unit": "ms",
+          "value": 154.6,
+          "samples": 248
+        },
+        {
+          "id": "upload.tcp.rtt.p50",
+          "unit": "ms",
+          "value": 170,
+          "samples": 248
+        },
+        {
+          "id": "upload.tcp.rtt.p95",
+          "unit": "ms",
+          "value": 190,
+          "samples": 248
+        },
+        {
+          "id": "upload.tcp.rtt.p99",
+          "unit": "ms",
+          "value": 190,
+          "samples": 248
+        },
+        {
+          "id": "upload.tcp.rtt.p50.increase",
+          "unit": "ms",
+          "value": 138.5,
+          "samples": 248
+        },
+        {
+          "id": "upload.tcp.rtt.p95.increase",
+          "unit": "ms",
+          "value": 153.9,
+          "samples": 248
+        },
+        {
+          "id": "bidirectional.goodput.download",
+          "unit": "Mbit/s",
+          "value": 71.002
+        },
+        {
+          "id": "bidirectional.goodput.upload",
+          "unit": "Mbit/s",
+          "value": 18.204
+        },
+        {
+          "id": "bidirectional.goodput.confidence",
+          "unit": "level",
+          "value": 3
+        },
+        {
+          "id": "bidirectional.connections",
+          "unit": "count",
+          "value": 26
+        },
+        {
+          "id": "bidirectional.connect_failures",
+          "unit": "count",
+          "value": 2
+        },
+        {
+          "id": "bidirectional.bytes",
+          "unit": "B",
+          "value": 245678901
+        },
+        {
+          "id": "bidirectional.wait",
+          "unit": "ms",
+          "value": 10000
+        },
+        {
+          "id": "bidirectional.rpm",
+          "unit": "RPM",
+          "value": 248,
+          "samples": 220
+        },
+        {
+          "id": "bidirectional.rpm.confidence",
+          "unit": "level",
+          "value": 2
+        },
+        {
+          "id": "bidirectional.self.p50",
+          "unit": "ms",
+          "value": 402,
+          "samples": 110
+        },
+        {
+          "id": "bidirectional.self.p95",
+          "unit": "ms",
+          "value": 474,
+          "samples": 110
+        },
+        {
+          "id": "bidirectional.foreign.p50",
+          "unit": "ms",
+          "value": 196,
+          "samples": 110
+        },
+        {
+          "id": "bidirectional.foreign.p95",
+          "unit": "ms",
+          "value": 232,
+          "samples": 110
+        },
+        {
+          "id": "bidirectional.foreign.failed",
+          "unit": "count",
+          "value": 3
+        },
+        {
+          "id": "bidirectional.udp.rtt.p50",
+          "unit": "ms",
+          "value": 170,
+          "samples": 545
+        },
+        {
+          "id": "bidirectional.udp.rtt.p95",
+          "unit": "ms",
+          "value": 190,
+          "samples": 545
+        },
+        {
+          "id": "bidirectional.udp.rtt.p99",
+          "unit": "ms",
+          "value": 190,
+          "samples": 545
+        },
+        {
+          "id": "bidirectional.udp.loss",
+          "unit": "%",
+          "value": 1.0889,
+          "low": 0.5,
+          "high": 2.3551,
+          "samples": 551
+        },
+        {
+          "id": "bidirectional.udp.rtt.p50.increase",
+          "unit": "ms",
+          "value": 138.8,
+          "samples": 545
+        },
+        {
+          "id": "bidirectional.udp.rtt.p95.increase",
+          "unit": "ms",
+          "value": 154.6,
+          "samples": 545
+        },
+        {
+          "id": "bidirectional.tcp.rtt.p50",
+          "unit": "ms",
+          "value": 170,
+          "samples": 545
+        },
+        {
+          "id": "bidirectional.tcp.rtt.p95",
+          "unit": "ms",
+          "value": 190,
+          "samples": 545
+        },
+        {
+          "id": "bidirectional.tcp.rtt.p99",
+          "unit": "ms",
+          "value": 190,
+          "samples": 545
+        },
+        {
+          "id": "bidirectional.tcp.rtt.p50.increase",
+          "unit": "ms",
+          "value": 138.5,
+          "samples": 545
+        },
+        {
+          "id": "bidirectional.tcp.rtt.p95.increase",
+          "unit": "ms",
+          "value": 153.9,
+          "samples": 545
+        },
+        {
+          "id": "lag.ticks",
+          "unit": "count",
+          "value": 3600
+        },
+        {
+          "id": "lag.over_10ms",
+          "unit": "count",
+          "value": 3
+        },
+        {
+          "id": "send_slip.over_10ms",
+          "unit": "count",
+          "value": 0
+        },
+        {
+          "id": "cpu.busy_max",
+          "unit": "%",
+          "value": 51
+        }
+      ],
+      "inferences": [
+        {
+          "key": "load.inference.connect_failures",
+          "params": {
+            "count": 2,
+            "phase": "bidirectional",
+            "timeout_ms": 15000
+          },
+          "basis": [
+            "bidirectional.connect_failures"
+          ]
+        },
+        {
+          "key": "load.inference.rpm_unsettled",
+          "params": {
+            "phase": "bidirectional"
+          },
+          "basis": [
+            "bidirectional.rpm.confidence"
+          ]
+        },
+        {
+          "key": "load.inference.rpm_poor",
+          "params": {
+            "phase": "bidirectional",
+            "rpm": 248
+          },
+          "basis": [
+            "bidirectional.rpm"
+          ]
+        }
+      ],
+      "not_proven": [
+        {
+          "key": "load.not_proven.queue_not_drained",
+          "params": {
+            "phase": "bidirectional",
+            "wait_ms": 10000
+          },
+          "basis": [
+            "bidirectional.wait"
+          ]
+        },
+        {
+          "key": "load.not_proven.foreign_failed",
+          "params": {
+            "count": 3,
+            "phase": "bidirectional"
+          },
+          "basis": [
+            "bidirectional.foreign.failed"
+          ]
+        },
+        {
+          "key": "load.not_proven.bottleneck_side"
+        },
+        {
+          "key": "load.not_proven.host_traffic"
+        }
+      ],
+      "node": {
+        "label": "example",
+        "version": "v0.0.0-golden",
+        "observed_addr": "198.51.100.7:51234",
+        "granted": {
+          "connections": 1,
+          "dial_rate": 1,
+          "duration_s": 82,
+          "idle_timeout_s": 60,
+          "stamp_rate": 100,
+          "load_bytes": 1510000000,
+          "load_connections": 40
+        },
+        "load_start": {
+          "sessions": 1,
+          "connections": 0,
+          "max_connections": 20000,
+          "uptime_s": 3700
+        },
+        "load_end": {
+          "sessions": 0,
+          "connections": 0,
+          "max_connections": 20000,
+          "uptime_s": 3752
+        },
+        "traffic": {
+          "sent_bytes": 235123456,
+          "received_bytes": 171234567,
+          "lag_ticks": 5200,
+          "lag_over": 3
+        }
+      }
+    }
+  ]
+}

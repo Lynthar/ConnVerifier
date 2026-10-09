@@ -19,9 +19,13 @@ the result says the node, not your network, set the limit.
 
 `connverifier check` measures the same path's round-trip time and its variation
 over UDP and TCP side by side, and UDP loss — split into the way to the node and
-the way back, without synchronized clocks.
+the way back, without synchronized clocks. Then it loads the path with TCP —
+download, upload, both — and reports the goodput and how far the same round trips
+rise while the path is full, with responsiveness in the terms of the IETF draft
+`draft-ietf-ippm-responsiveness`.
 
-One binary, one dependency (`golang.org/x/term`).
+One binary; its only dependencies are the Go project's `golang.org/x/term` and
+`golang.org/x/sys`.
 
 ## Build
 
@@ -67,9 +71,13 @@ ulimit -n 20480
 ./bin/connverifier capacity -node @alice.invite -clients 1000 -duration 1h -yes
 ```
 
-`check` needs no confirmation: it sends 50 small packets a second over UDP and
-over TCP for 20 seconds (`-rate`, `-duration`). An invite made before UDP probes
-existed has no UDP port; the UDP half then reports `UNSUPPORTED`.
+`check` first sends 50 small packets a second over UDP and over TCP for 20 seconds
+(`-rate`, `-duration`), then loads the path in three phases of at most 20 seconds
+and 500 MB each (`-load-time`, `-load-mb`); it says how much traffic that may be
+before it starts. Above 500 MB per phase it asks for confirmation, as `capacity`
+does. An invite made before UDP probes existed has no UDP port; the UDP half then
+reports `UNSUPPORTED`, and an older node or invite without load reports the load
+check `UNSUPPORTED`.
 
 ```bash
 ./bin/connverifier check -node @alice.invite
@@ -119,23 +127,26 @@ What each status and number means, and when not to trust it, is in
 [docs/protocol.md](docs/protocol.md).
 
 Everything is a flag. `check`: `-node`, `-rate` (50), `-duration` (20s),
-`-dial-timeout` (5s), `-format`, `-lang`. `capacity`: `-node`, `-clients` (1000), `-start-rate` (100),
+`-dial-timeout` (5s), `-load-interval` (1s), `-load-time` (20s), `-load-mb` (500),
+`-format`, `-lang`, `-yes`. `capacity`: `-node`, `-clients` (1000), `-start-rate` (100),
 `-heartbeat` (30s), `-dial-timeout` (5s), `-io-timeout` (5s), `-min-backoff`
 (500ms), `-max-backoff` (1m), `-duration` (0 = until interrupted), `-log-drops`,
 `-format` (text), `-lang`, `-yes`. `serve`: `-listen` (:7443), `-listen-udp` (the
 `-listen` address), `-state-dir`, `-max-conns` (20000), `-max-sessions` (64),
-`-log-connections`. `invite create`: `-label`, `-addr` (repeatable),
+`-max-load-sessions` (1), `-log-connections`. `invite create`: `-label`, `-addr` (repeatable),
 `-udp-port` (the first `-addr`'s port), `-max-sessions` (2), `-max-connections`
 (20000), `-max-dial-rate` (1000), `-max-stamp-rate` (100), `-max-duration` (24h),
-`-max-idle` (1h).
+`-max-idle` (1h), `-max-load-mb` (2000), `-max-load-mb-per-day` (20000),
+`-max-load-connections` (48).
 
 Neither side enables TCP keepalive: keepalive probes would refresh the NAT
 mapping and quietly turn every result into "the NAT is fine".
 
 ## Limitations
 
-- **Idle path only.** No bandwidth or delay under load, no STUN, no DNS, one UDP
-  packet size; delay is round trip only, never one way.
+- **TCP load only.** No UDP bandwidth yet, no STUN, no DNS, one UDP packet size;
+  delay is round trip only, never one way. Goodput is to one node: whether the
+  limit is your connection or the node's own uplink is not determined.
 - **The JSON schema is `v0`.** It can still change between builds; pin a build
   if you parse it, and don't parse the text.
 - **The exit code doesn't judge your network.** `0` means the run completed,

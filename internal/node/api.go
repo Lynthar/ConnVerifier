@@ -14,11 +14,24 @@ import (
 	"github.com/Lynthar/ConnVerifier/internal/protocol"
 )
 
+// routes serves the control plane behind the per-address request limit, and the
+// load endpoints without it: a load check sends tens of requests a second.
 func (s *server) routes() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST "+protocol.PathSessions, s.createSession)
-	mux.HandleFunc("DELETE "+protocol.PathSessions+"/{id}", s.endSession)
-	return s.requests.wrap(mux)
+	control := http.NewServeMux()
+	control.HandleFunc("POST "+protocol.PathSessions, s.createSession)
+	control.HandleFunc("DELETE "+protocol.PathSessions+"/{id}", s.endSession)
+	limited := s.requests.wrap(control)
+	load := http.NewServeMux()
+	load.HandleFunc("GET "+protocol.PathSessions+"/{id}"+protocol.LoadSmall, s.loadSmall)
+	load.HandleFunc("GET "+protocol.PathSessions+"/{id}"+protocol.LoadLarge, s.loadLarge)
+	load.HandleFunc("POST "+protocol.PathSessions+"/{id}"+protocol.LoadUpload, s.loadUpload)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, pattern := load.Handler(r); pattern != "" {
+			load.ServeHTTP(w, r)
+			return
+		}
+		limited.ServeHTTP(w, r)
+	})
 }
 
 // authenticate finds the invite whose token the request bears. The invite list
@@ -58,14 +71,17 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
-	case req.Check == protocol.CheckBaseline && s.udp:
-	case req.Check == protocol.CheckBaseline, req.Check == protocol.CheckTCPCapacity:
+	case (req.Check == protocol.CheckBaseline || req.Check == protocol.CheckLoad) && s.udp:
+	case req.Check == protocol.CheckBaseline, req.Check == protocol.CheckLoad, req.Check == protocol.CheckTCPCapacity:
 		req.Want.StampRate = 0 // no reflector here, or a check that sends no STAMP
 	default:
 		writeError(w, http.StatusBadRequest, protocol.ErrReasonBadRequest, 0, "unsupported check")
 		return
 	}
-	sess, reason := s.store.create(inv.TokenSHA256, inv.Limits, req.Want, time.Now())
+	if req.Check != protocol.CheckLoad {
+		req.Want.LoadBytes, req.Want.LoadConnections = 0, 0
+	}
+	sess, reason := s.store.create(inv.TokenSHA256, inv.Limits, req.Want, requestIP(r), time.Now())
 	switch reason {
 	case protocol.ErrReasonQuota:
 		writeError(w, http.StatusTooManyRequests, reason, 60, "this invite already has its maximum number of sessions")
@@ -92,6 +108,7 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 	if sess.stamp != nil {
 		resp.Stamp = &protocol.StampGrant{SSID: sess.stamp.ssid}
 	}
+	resp.Load = sess.loadAns
 	writeJSON(w, http.StatusCreated, resp)
 }
 
@@ -106,22 +123,28 @@ func (s *server) endSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, protocol.ErrReasonBadRequest, 0, "bad session id")
 		return
 	}
-	found := false
-	var stamp *protocol.StampCounts
+	var ended *session
 	conns := s.store.end(func(sess *session) bool {
 		match := sess.id == id && sess.invite == inv.TokenSHA256
-		if match && sess.stamp != nil {
-			stamp = sess.stamp.counts()
+		if match {
+			ended = sess
 		}
-		found = found || match
 		return match
 	})
-	if !found {
+	if ended == nil {
 		writeError(w, http.StatusNotFound, protocol.ErrReasonBadRequest, 0, "no such session")
 		return
 	}
 	closeAll(conns, protocol.ReasonSessionEnded)
-	writeJSON(w, http.StatusOK, protocol.SessionEnd{Node: s.nodeInfo(), Stamp: stamp})
+	resp := protocol.SessionEnd{Node: s.nodeInfo()}
+	if ended.stamp != nil {
+		resp.Stamp = ended.stamp.counts()
+	}
+	if ended.load != nil {
+		counts := ended.load.finish() // end already finished it; this reads the counts
+		resp.Load = &counts
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -170,11 +193,7 @@ func (l *requestLimiter) allow(a netip.Addr, now time.Time) bool {
 
 func (l *requestLimiter) wrap(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var a netip.Addr
-		if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
-			a = ap.Addr().Unmap()
-		}
-		if !l.allow(a, time.Now()) {
+		if !l.allow(requestIP(r), time.Now()) {
 			writeError(w, http.StatusTooManyRequests, protocol.ErrReasonQuota, 1, "too many requests")
 			return
 		}

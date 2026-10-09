@@ -3,6 +3,7 @@ package node
 import (
 	"crypto/rand"
 	"net"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -53,30 +54,38 @@ type session struct {
 	dials   bucket
 	conns   map[*dataConn]struct{} // live; guarded by store.mu
 	stamp   *stampState            // nil unless granted a STAMP rate
+	load    *loadState             // nil unless granted load
+	loadAns *protocol.LoadGrant    // what to answer about load; nil when not asked or not offered
 }
 
 // store holds sessions and enforces every count: sessions per invite and in
-// total, live connections per session and in total, new connections per second.
+// total, live connections per session and in total, new connections per second,
+// sessions with load at once and load bytes per invite per day.
 type store struct {
-	mu          sync.Mutex
-	sessions    map[[16]byte]*session
-	bySSID      map[uint16]*session
-	perInvite   map[string]int
-	liveConns   int
-	maxConns    int
-	maxSessions int
-	started     time.Time
-	closing     bool // set by close: no new sessions or connections
+	mu              sync.Mutex
+	sessions        map[[16]byte]*session
+	bySSID          map[uint16]*session
+	perInvite       map[string]int
+	daily           map[string]*dayUse // load granted per invite today; lost on restart
+	liveConns       int
+	maxConns        int
+	maxSessions     int
+	loadSessions    int
+	maxLoadSessions int
+	started         time.Time
+	closing         bool // set by close: no new sessions or connections
 }
 
-func newStore(maxConns, maxSessions int, now time.Time) *store {
+func newStore(maxConns, maxSessions, maxLoadSessions int, now time.Time) *store {
 	return &store{
-		sessions:    make(map[[16]byte]*session),
-		bySSID:      make(map[uint16]*session),
-		perInvite:   make(map[string]int),
-		maxConns:    maxConns,
-		maxSessions: maxSessions,
-		started:     now,
+		sessions:        make(map[[16]byte]*session),
+		bySSID:          make(map[uint16]*session),
+		perInvite:       make(map[string]int),
+		daily:           make(map[string]*dayUse),
+		maxConns:        maxConns,
+		maxSessions:     maxSessions,
+		maxLoadSessions: maxLoadSessions,
+		started:         now,
 	}
 }
 
@@ -91,9 +100,10 @@ func (s *store) load() protocol.Load {
 	}
 }
 
-// create grants want within the invite's limits. It returns the API error
-// reason when the invite or the node has no room for another session.
-func (s *store) create(invite string, lim InviteLimits, want protocol.Limits, now time.Time) (*session, string) {
+// create grants want within the invite's limits; ip is where the request came
+// from. It returns the API error reason when the invite or the node has no room
+// for another session. Load that cannot be granted now does not refuse the session.
+func (s *store) create(invite string, lim InviteLimits, want protocol.Limits, ip netip.Addr, now time.Time) (*session, string) {
 	g := protocol.Limits{
 		Connections:  min(want.Connections, lim.MaxConnections),
 		DialRate:     min(want.DialRate, lim.MaxDialRate),
@@ -130,9 +140,63 @@ func (s *store) create(invite string, lim InviteLimits, want protocol.Limits, no
 		sess.stamp = newStampState(s.freeSSID(), protocol.StampKey(sess.secret), g.StampRate, now)
 		s.bySSID[sess.stamp.ssid] = sess
 	}
+	if want.LoadBytes > 0 && lim.MaxLoadBytes > 0 && s.maxLoadSessions > 0 {
+		s.grantLoad(sess, lim, want, ip, now)
+	}
 	s.sessions[sess.id] = sess
 	s.perInvite[invite]++
 	return sess, ""
+}
+
+// grantLoad charges the grant to the invite's day at once, so sessions in
+// parallel cannot overrun it; end returns what was not used. Callers hold s.mu.
+func (s *store) grantLoad(sess *session, lim InviteLimits, want protocol.Limits, ip netip.Addr, now time.Time) {
+	day := now.UTC().Truncate(24 * time.Hour)
+	d := s.daily[sess.invite]
+	if d == nil || !d.day.Equal(day) {
+		d = &dayUse{day: day}
+		s.daily[sess.invite] = d
+	}
+	switch left := lim.MaxLoadBytesPerDay - d.used; {
+	case s.loadSessions >= s.maxLoadSessions:
+		sess.loadAns = &protocol.LoadGrant{Refused: protocol.ErrReasonBusy, RetryAfterS: loadRetryS}
+	case left <= 0:
+		retry := int(day.Add(24*time.Hour).Sub(now).Seconds()) + 1
+		sess.loadAns = &protocol.LoadGrant{Refused: protocol.ErrReasonQuota, RetryAfterS: retry}
+	default:
+		bytes := min(want.LoadBytes, lim.MaxLoadBytes, left)
+		conns := min(want.LoadConnections, lim.MaxLoadConnections)
+		d.used += bytes
+		s.loadSessions++
+		sess.load = newLoadState(ip, bytes, conns, day, now)
+		sess.loadAns = &protocol.LoadGrant{Bytes: bytes, Connections: conns}
+	}
+}
+
+// loadAllowance is how many more connections, beyond the per-address limits, may
+// come from ip: the load connections of its live sessions.
+func (s *store) loadAllowance(ip netip.Addr) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, sess := range s.sessions {
+		if sess.load != nil && sess.load.ip == ip {
+			n += sess.load.conns
+		}
+	}
+	return n
+}
+
+// loadSession returns the live session id with a load grant that the invite with
+// token hash invite created, or nil.
+func (s *store) loadSession(id [16]byte, invite string, now time.Time) *session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess := s.sessions[id]
+	if sess == nil || sess.load == nil || sess.invite != invite || !now.Before(sess.expires) {
+		return nil
+	}
+	return sess
 }
 
 // admit decides one data-plane HELLO. On success the connection counts as live
@@ -192,6 +256,13 @@ func (s *store) end(pick func(*session) bool) []*dataConn {
 		s.liveConns -= len(sess.conns)
 		if sess.stamp != nil {
 			delete(s.bySSID, sess.stamp.ssid)
+		}
+		if sess.load != nil {
+			sess.load.finish()
+			s.loadSessions--
+			if d := s.daily[sess.invite]; d != nil && d.day.Equal(sess.load.day) {
+				d.used -= sess.load.unused()
+			}
 		}
 		s.perInvite[sess.invite]--
 		if s.perInvite[sess.invite] == 0 {

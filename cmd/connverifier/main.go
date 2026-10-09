@@ -20,6 +20,7 @@ import (
 	"github.com/Lynthar/ConnVerifier/internal/node"
 	"github.com/Lynthar/ConnVerifier/internal/probe/baseline"
 	"github.com/Lynthar/ConnVerifier/internal/probe/capacity"
+	"github.com/Lynthar/ConnVerifier/internal/probe/load"
 	"github.com/Lynthar/ConnVerifier/internal/report"
 	"github.com/Lynthar/ConnVerifier/internal/result"
 	"github.com/Lynthar/ConnVerifier/internal/runner"
@@ -29,7 +30,8 @@ import (
 const usage = `usage: connverifier <command> [flags]
 
 commands:
-  check      measure UDP and TCP round trip, its variation and UDP loss to a node
+  check      measure round trip, its variation and UDP loss to a node, idle and
+             with the path loaded, and the goodput of the load
   capacity   hold N long-lived TCP connections against a node and report drops
   serve      run a node that clients measure against
   invite     create, list or revoke the invites a node accepts
@@ -55,15 +57,26 @@ func main() {
 	switch cmd {
 	case "check":
 		var cfg baseline.Config
+		var ld load.Config
 		var out output
+		var yes bool
 		parse(cmd, args, func(fs *flag.FlagSet) {
 			cfg.RegisterFlags(fs)
+			ld.RegisterFlags(fs)
 			out.register(fs)
+			fs.BoolVar(&yes, "yes", false, "start a run above the default traffic without the confirmation prompt")
 		})
 		invalidIf(cfg.Validate())
+		ld.Use(cfg.Shared())
+		invalidIf(ld.Validate())
 		invalidIf(out.resolve())
+		if ld.Large() {
+			confirm(out.cat, ld.Notice(), yes)
+		} else {
+			fmt.Fprintln(os.Stderr, report.Message(out.cat, ld.Notice()))
+		}
 		started := time.Now()
-		checks, err := baseline.Run(ctx, cfg, buildVersion())
+		checks, err := runner.Check(ctx, cfg, ld, buildVersion())
 		if err != nil {
 			log.Fatal(err)
 		}
