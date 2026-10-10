@@ -40,7 +40,7 @@ func startNode(t *testing.T, lim node.InviteLimits, flags ...string) memNode {
 	ln := memnet.NewListener()
 	ctx, cancel := context.WithCancel(context.Background())
 	stopped := make(chan struct{})
-	go func() { node.ServeOn(ctx, ln, nil, cfg, "vtest"); close(stopped) }()
+	go func() { node.ServeOn(ctx, ln, nil, nil, cfg, "vtest"); close(stopped) }()
 	return memNode{invite: inv.Encode(), dial: ln.Dial, stop: func() { cancel(); <-stopped }}
 }
 

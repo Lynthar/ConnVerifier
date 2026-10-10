@@ -13,14 +13,25 @@ import (
 	"testing"
 )
 
-// TestDialAndListenOnlyHere fails when code outside this package dials or listens
-// through package net directly, which would bypass the keepalive rule.
+// TestDialAndListenOnlyHere fails when code outside this package opens a socket
+// any other way: through package net directly, through quic-go or http3 helpers
+// that open their own, by ListenAndServe, or by an HTTP transport left to dial
+// for itself. Each would bypass the keepalive rule.
 func TestDialAndListenOnlyHere(t *testing.T) {
-	forbidden := map[string]bool{
-		"Dial": true, "DialTimeout": true, "DialTCP": true, "Dialer": true,
-		"Listen": true, "ListenTCP": true, "ListenConfig": true,
-		"ListenPacket": true, "ListenUDP": true, "DialUDP": true, "ListenMulticastUDP": true,
-		"ListenIP": true, "DialIP": true, "ListenUnix": true, "ListenUnixgram": true, "DialUnix": true,
+	forbidden := map[string]map[string]bool{
+		"net": {
+			"Dial": true, "DialTimeout": true, "DialTCP": true, "Dialer": true,
+			"Listen": true, "ListenTCP": true, "ListenConfig": true,
+			"ListenPacket": true, "ListenUDP": true, "DialUDP": true, "ListenMulticastUDP": true,
+			"ListenIP": true, "DialIP": true, "ListenUnix": true, "ListenUnixgram": true, "DialUnix": true,
+		},
+		"github.com/quic-go/quic-go":       {"DialAddr": true, "DialAddrEarly": true, "ListenAddr": true, "ListenAddrEarly": true},
+		"github.com/quic-go/quic-go/http3": {"ListenAndServeQUIC": true, "ListenAndServeTLS": true},
+	}
+	// A transport literal must name its dial function, or it dials on its own.
+	mustDial := map[string]map[string]string{
+		"net/http":                         {"Transport": "DialContext"},
+		"github.com/quic-go/quic-go/http3": {"Transport": "Dial"},
 	}
 	self, err := filepath.Abs(".")
 	if err != nil {
@@ -53,25 +64,53 @@ func TestDialAndListenOnlyHere(t *testing.T) {
 			return err
 		}
 		scanned++
-		netName := ""
+		imported := map[string]string{} // local name -> import path
 		for _, imp := range f.Imports {
-			if imp.Path.Value == `"net"` {
-				netName = "net"
-				if imp.Name != nil {
-					netName = imp.Name.Name
-				}
+			p := strings.Trim(imp.Path.Value, `"`)
+			name := p[strings.LastIndex(p, "/")+1:]
+			if p == "github.com/quic-go/quic-go" {
+				name = "quic"
 			}
+			if imp.Name != nil {
+				name = imp.Name.Name
+			}
+			imported[name] = p
 		}
-		if netName == "" {
-			return nil
+		pkgOf := func(e ast.Expr) (string, string, bool) {
+			sel, ok := e.(*ast.SelectorExpr)
+			if !ok {
+				return "", "", false
+			}
+			id, ok := sel.X.(*ast.Ident)
+			if !ok {
+				return "", "", false
+			}
+			p, ok := imported[id.Name]
+			return p, sel.Sel.Name, ok
 		}
 		ast.Inspect(f, func(n ast.Node) bool {
-			sel, ok := n.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			if id, ok := sel.X.(*ast.Ident); ok && id.Name == netName && forbidden[sel.Sel.Name] {
-				t.Errorf("%s: net.%s used outside netx", fset.Position(sel.Pos()), sel.Sel.Name)
+			switch n := n.(type) {
+			case *ast.SelectorExpr:
+				if p, name, ok := pkgOf(n); ok && forbidden[p][name] {
+					t.Errorf("%s: %s.%s used outside netx", fset.Position(n.Pos()), p, name)
+				}
+				if n.Sel.Name == "ListenAndServe" || n.Sel.Name == "ListenAndServeTLS" {
+					t.Errorf("%s: %s opens its own listener", fset.Position(n.Pos()), n.Sel.Name)
+				}
+			case *ast.CompositeLit:
+				p, name, ok := pkgOf(n.Type)
+				field := mustDial[p][name]
+				if !ok || field == "" {
+					return true
+				}
+				for _, el := range n.Elts {
+					if kv, ok := el.(*ast.KeyValueExpr); ok {
+						if k, ok := kv.Key.(*ast.Ident); ok && k.Name == field {
+							return true
+						}
+					}
+				}
+				t.Errorf("%s: %s.%s without %s dials on its own", fset.Position(n.Pos()), p, name, field)
 			}
 			return true
 		})

@@ -146,6 +146,9 @@ func writeNode(b *strings.Builder, field func(indent, label, value string), n *r
 			"duration_ms": g.DurationS * 1000, "idle_ms": g.IdleTimeoutS * 1000, "stamp": stamp,
 		}}))
 	}
+	if n.TCPCongestion != "" {
+		field("  ", cat.Text("node.tcp_congestion", nil), n.TCPCongestion)
+	}
 	if tr := n.Traffic; tr != nil {
 		field("  ", cat.Text("node.traffic", nil), cat.Text("node.traffic_value", map[string]any{
 			"sent": formatBytes(float64(tr.SentBytes)), "received": formatBytes(float64(tr.ReceivedBytes)),

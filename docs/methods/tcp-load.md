@@ -17,7 +17,8 @@ rise? And what is the responsiveness in the terms of
 - **Which side is the bottleneck**: this host's connection, the networks between, or
   the node's own uplink. A node that cannot keep up is detected (section 5); the
   capacity of its network is not. Several nodes tell more.
-- **UDP bandwidth.** The load is TCP only.
+- **UDP bandwidth.** The load is TCP only; [`quic-load`](quic-load.md) runs the same
+  method over QUIC right after it.
 - **Other congestion control.** The load uses this host's TCP congestion control,
   which differs between Linux, macOS and Windows; the result names the platform.
 - **Long-term behaviour** such as evening slowdowns: each phase lasts seconds.
@@ -160,7 +161,7 @@ Other traffic on this host or its network is not checked; every result says so.
 This host sends the node load data — zeros, holding nothing of this host — and
 probe requests. The node sees this host's address and traffic pattern. Before the
 run the tool states how much traffic it may move: three phases of at most
-`-load-mb` each. The result holds the parameters, per-phase values and counts, and
+`-load-mb` each, and as many again for `quic-load`. The result holds the parameters, per-phase values and counts, and
 what the node reported (bytes it sent and received, its timer); not the raw samples.
 It is printed and not sent anywhere.
 
@@ -174,16 +175,19 @@ probes. Run with the default parameters and a 10 s idle stage.
 
 | # | Injected | Pass condition | Last result |
 |---|---|---|---|
-| L1 | 20 ms round trip, 20 Mbit/s each way, 40 ms queue | In each of 10 runs: download and upload goodput in [0.93 C, 1.005 C], settled; neither direction of both together above its C | 10/10: download 97.1–97.3% of C, upload 95.7–96.7% |
-| L2 | As L1 at 100 Mbit/s | As L1; and never this host or the node reported as the limit (also L7) | 10/10: download 99.4%, upload 98.7–99.5%; no late timer wake-up in any run |
-| L3 | 100 Mbit/s down, 10 Mbit/s up | As L1, 5 runs | 5/5: download 99.2–99.4%, upload 94.7–96.1% |
-| L4 | 20 Mbit/s, 200 ms FIFO queue | Independent UDP and TCP p50 under load in [170, 240] ms; RPM below 300 | 3/3: UDP 212–224 ms, TCP 214–223 ms; 165–196 RPM |
-| L5 | As L4 with `fq_codel` in the queue | UDP p50 under load at most 15 ms above idle; self probes slower than foreign ones | 3/3: UDP at most idle; self 236–761 ms, foreign 64–70 ms |
-| L6 | 1 Gbit/s; this host limited to a tenth of a CPU | `INVALID` for this host, 10 of 10 runs | 10/10; 11–75% of wake-ups late per phase |
+| L1 | 20 ms round trip, 20 Mbit/s each way, 40 ms queue | In each of 10 runs: download and upload goodput in [0.93 C, 1.005 C], settled; neither direction of both together above its C | 10/10: download 96.9–97.5% of C, upload 96.1–97.4% |
+| L2 | As L1 at 100 Mbit/s | As L1; and never this host or the node reported as the limit (also L7) | 10/10: download 99.4%, upload 98.0–99.1%; never this host or the node as the limit |
+| L3 | 100 Mbit/s down, 10 Mbit/s up | As L1, 5 runs | 5/5: download 98.7–99.4%, upload 95.0–95.7% |
+| L4 | 20 Mbit/s, 200 ms FIFO queue | Independent UDP and TCP p50 under load in [170, 240] ms; RPM below 300 | 3/3: UDP 212–221 ms, TCP 213–220 ms; 164–199 RPM |
+| L5 | As L4 with `fq_codel` in the queue | UDP p50 under load at most 15 ms above idle; self probes slower than foreign ones | 3/3: UDP at most idle; self 262–730 ms, foreign 69–72 ms |
+| L6 | 1 Gbit/s; this host limited to a tenth of a CPU | `INVALID` for this host, 10 of 10 runs | 10/10; 45–91% of wake-ups late per phase |
 | L8 | 100 Mbit/s; the node grants 50 MB | Every phase a lower bound; the node moves at most 50 MB | passed |
-| L9 | 100 Mbit/s down; 10 Mbit/s up with a 2 s queue and 1% loss | In each of 3 runs: no phase aborted; upload goodput reported and at most C | 3/3: upload 9.34–9.40 Mbit/s (C 9.55) |
+| L9 | 100 Mbit/s down; 10 Mbit/s up with a 2 s queue and 1% loss | In each of 3 runs: no phase aborted; upload goodput reported and at most C | not met: no phase aborted in 9 runs, but 4 uploads above C — 9.63–9.80 Mbit/s against 9.55, up to 2.6%; the others 8.65–9.31 |
 
-Last run: 2026-10-10, Linux 6.8 (Ubuntu 24.04, arm64 virtual machine), Go 1.27.1.
+Last run: 2026-10-10 and 11, Linux 6.8 (Ubuntu 24.04, arm64 virtual machine), Go 1.27.1.
+On L9 the upload estimate can exceed C: after a loss, the bytes held behind the
+retransmission reach the node together a 2 s round trip later, and a four-second
+moving average can take in such a batch.
 In-memory tests check the same plumbing: goodput behind a shared 32 Mbit/s token
 bucket settles within 3% of it.
 

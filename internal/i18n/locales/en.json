@@ -257,5 +257,15 @@
   "metric.wait": "Wait before the phase for the queue to drain",
   "load.inference.connect_failures": "{phase}: {count} load connections did not open within {timeout_ms}; the phase went on with the rest. With the path loaded, even opening a connection was this slow.",
   "load.not_proven.foreign_failed": "{phase}: {count} requests on a new connection did not complete and are left out of the responsiveness, which is therefore better than what the path delivered.",
-  "load.not_proven.queue_not_drained": "{phase}: the previous phase's queue had not drained after {wait_ms}, so this phase started on a fuller path."
+  "load.not_proven.queue_not_drained": "{phase}: the previous phase's queue had not drained after {wait_ms}, so this phase started on a fuller path.",
+
+  "check.quic-load.title": "QUIC under load: goodput and responsiveness",
+  "param.quic_go": "QUIC library (quic-go)",
+  "metric.host.udp_receive_buffer": "Host UDP receive buffer",
+  "metric.host.udp_send_buffer": "Host UDP send buffer",
+  "node.tcp_congestion": "Node's TCP congestion control",
+  "quic_load.unsupported.node_without_quic": "The node offers no HTTP/3 load (no QUIC port, or an older version); ask its owner to upgrade it or open its QUIC port.",
+  "quic_load.error.address": "Could not work out the node's QUIC address: {error}",
+  "quic_load.inference.blocked": "UDP reaches the node, yet every QUIC handshake failed: something on the path may recognize and block QUIC, or the node's QUIC port is not open.",
+  "quic_load.not_proven.udp_buffer": "This host's UDP buffers (see the two observations) are below the {wanted_mib} MiB quic-go asks for; on a fast or long path QUIC may drop packets on this host and goodput read low. On Linux, raise net.core.rmem_max and net.core.wmem_max with sysctl."
 }

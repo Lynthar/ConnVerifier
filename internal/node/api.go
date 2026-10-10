@@ -21,10 +21,7 @@ func (s *server) routes() http.Handler {
 	control.HandleFunc("POST "+protocol.PathSessions, s.createSession)
 	control.HandleFunc("DELETE "+protocol.PathSessions+"/{id}", s.endSession)
 	limited := s.requests.wrap(control)
-	load := http.NewServeMux()
-	load.HandleFunc("GET "+protocol.PathSessions+"/{id}"+protocol.LoadSmall, s.loadSmall)
-	load.HandleFunc("GET "+protocol.PathSessions+"/{id}"+protocol.LoadLarge, s.loadLarge)
-	load.HandleFunc("POST "+protocol.PathSessions+"/{id}"+protocol.LoadUpload, s.loadUpload)
+	load := s.loadRoutes()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, pattern := load.Handler(r); pattern != "" {
 			load.ServeHTTP(w, r)
@@ -81,7 +78,8 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 	if req.Check != protocol.CheckLoad {
 		req.Want.LoadBytes, req.Want.LoadConnections = 0, 0
 	}
-	sess, reason := s.store.create(inv.TokenSHA256, inv.Limits, req.Want, requestIP(r), time.Now())
+	quic := req.Check == protocol.CheckLoad && req.Transport == protocol.TransportQUIC && s.quicPort > 0
+	sess, reason := s.store.create(inv.TokenSHA256, inv.Limits, req.Want, requestIP(r), quic, time.Now())
 	switch reason {
 	case protocol.ErrReasonQuota:
 		writeError(w, http.StatusTooManyRequests, reason, 60, "this invite already has its maximum number of sessions")
@@ -109,6 +107,16 @@ func (s *server) createSession(w http.ResponseWriter, r *http.Request) {
 		resp.Stamp = &protocol.StampGrant{SSID: sess.stamp.ssid}
 	}
 	resp.Load = sess.loadAns
+	if a := sess.loadAns; a != nil && a.Refused == "" {
+		g := *a
+		if sess.load.quic {
+			g.QUIC = &protocol.QUICGrant{Port: s.quicPort}
+		}
+		if len(s.tcpCC) <= 64 {
+			g.TCPCongestion = s.tcpCC
+		}
+		resp.Load = &g
+	}
 	writeJSON(w, http.StatusCreated, resp)
 }
 

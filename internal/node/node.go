@@ -13,10 +13,12 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/Lynthar/ConnVerifier/internal/netenv"
 	"github.com/Lynthar/ConnVerifier/internal/netx"
 	"github.com/Lynthar/ConnVerifier/internal/protocol"
 )
@@ -35,6 +37,8 @@ const (
 type Config struct {
 	listen          string
 	listenUDP       string // "" means the same address as listen
+	listenQUIC      string // "" means listen's host and port + 1; "off" means none
+	quicPort        int    // the port clients are told; 0 means listenQUIC's
 	stateDir        string
 	maxConns        int
 	maxSessions     int
@@ -46,6 +50,8 @@ type Config struct {
 func (cfg *Config) RegisterFlags(fs *flag.FlagSet) {
 	fs.StringVar(&cfg.listen, "listen", ":7443", "TCP address to listen on (control plane and data plane share it)")
 	fs.StringVar(&cfg.listenUDP, "listen-udp", "", "UDP address for STAMP (default: the -listen address)")
+	fs.StringVar(&cfg.listenQUIC, "listen-quic", "", `UDP address for HTTP/3 load, or "off" (default: the -listen host, port + 1)`)
+	fs.IntVar(&cfg.quicPort, "quic-port", 0, "UDP port clients are told to reach HTTP/3 on, when a port mapping changes it (default: the -listen-quic port)")
 	fs.StringVar(&cfg.stateDir, "state-dir", DefaultStateDir(), "directory holding the node key and invites")
 	fs.IntVar(&cfg.maxConns, "max-conns", 20000, "live data-plane connections across all sessions")
 	fs.IntVar(&cfg.maxSessions, "max-sessions", 64, "sessions across all invites")
@@ -66,8 +72,31 @@ func (cfg Config) Validate() error {
 		return errors.New("max-sessions must be positive")
 	case cfg.maxLoadSessions < 0:
 		return errors.New("max-load-sessions must not be negative")
+	case cfg.quicPort < 0 || cfg.quicPort > 65535:
+		return errors.New("quic-port must be 0 to 65535")
 	}
-	return nil
+	_, err := cfg.quicAddr()
+	return err
+}
+
+// quicAddr is the UDP address for HTTP/3, or "" when it is off.
+func (cfg Config) quicAddr() (string, error) {
+	switch cfg.listenQUIC {
+	case "off":
+		return "", nil
+	case "":
+	default:
+		return cfg.listenQUIC, nil
+	}
+	host, port, err := net.SplitHostPort(cfg.listen)
+	if err != nil {
+		return "", fmt.Errorf("listen: %w", err)
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil || p < 1 || p > 65534 {
+		return "", errors.New("listen port must be 1 to 65534 to derive -listen-quic; set it explicitly")
+	}
+	return net.JoinHostPort(host, strconv.Itoa(p+1)), nil
 }
 
 type counters struct {
@@ -83,7 +112,10 @@ type server struct {
 	httpConns *pending
 	requests  *requestLimiter
 	stats     counters
-	udp       bool // a STAMP reflector is running
+	udp       bool   // a STAMP reflector is running
+	quicPort  int    // the port HTTP/3 grants name; 0 when HTTP/3 is off
+	tcpCC     string // this host's TCP congestion control, "" if unknown
+	quic      quicConns
 	wg        sync.WaitGroup
 }
 
@@ -106,17 +138,28 @@ func Serve(ctx context.Context, cfg Config, version string) error {
 		ln.Close()
 		return fmt.Errorf("listen failed: %w", err)
 	}
-	return ServeOn(ctx, ln, pc, cfg, version)
+	var qc net.PacketConn
+	if addr, _ := cfg.quicAddr(); addr != "" {
+		if qc, err = netx.ListenPacket(ctx, addr); err != nil {
+			ln.Close()
+			pc.Close()
+			return fmt.Errorf("listen failed: %w", err)
+		}
+	}
+	return ServeOn(ctx, ln, pc, qc, cfg, version)
 }
 
-// ServeOn runs the node on ln, and its STAMP reflector on pc unless pc is nil,
-// until ctx ends, then closes both. The caller must have created ln through netx,
-// or accepted connections may carry keepalive.
-func ServeOn(ctx context.Context, ln net.Listener, pc net.PacketConn, cfg Config, version string) error {
+// ServeOn runs the node on ln, its STAMP reflector on pc unless pc is nil, and
+// HTTP/3 load on qc unless qc is nil, until ctx ends, then closes them. The
+// caller must have created ln through netx, or accepted connections may carry
+// keepalive.
+func ServeOn(ctx context.Context, ln net.Listener, pc, qc net.PacketConn, cfg Config, version string) error {
 	closeAll := func() {
 		ln.Close()
-		if pc != nil {
-			pc.Close()
+		for _, c := range []net.PacketConn{pc, qc} {
+			if c != nil {
+				c.Close()
+			}
 		}
 	}
 	cert, err := LoadIdentity(cfg.stateDir)
@@ -129,19 +172,29 @@ func ServeOn(ctx context.Context, ln net.Listener, pc net.PacketConn, cfg Config
 		return err
 	}
 	pin := protocol.Pin(cert.Leaf)
-	udp := "off"
+	udp, quicAt, quicPort := "off", "off", 0
 	if pc != nil {
 		udp = pc.LocalAddr().String()
 	}
-	log.Printf("node listening on %s udp=%s key=%s max_conns=%d max_sessions=%d state=%s",
-		ln.Addr(), udp, protocol.EncodeID(pin[:]), cfg.maxConns, cfg.maxSessions, cfg.stateDir)
-	newServer(cfg, version, cert, pc != nil).serve(ctx, ln, pc)
+	if qc != nil {
+		quicAt, quicPort = qc.LocalAddr().String(), cfg.quicPort
+		if quicPort == 0 {
+			quicPort = addrPort(qc.LocalAddr())
+		}
+	}
+	log.Printf("node listening on %s udp=%s quic=%s key=%s max_conns=%d max_sessions=%d state=%s",
+		ln.Addr(), udp, quicAt, protocol.EncodeID(pin[:]), cfg.maxConns, cfg.maxSessions, cfg.stateDir)
+	s := newServer(cfg, version, cert, pc != nil)
+	s.quicPort = quicPort
+	s.serve(ctx, ln, pc, qc)
 	return nil
 }
 
 func newServer(cfg Config, version string, cert tls.Certificate, udp bool) *server {
 	now := time.Now()
 	return &server{
+		tcpCC:     netenv.TCPCongestion(),
+		quic:      quicConns{live: make(map[netip.Addr]int)},
 		cfg:       cfg,
 		version:   version,
 		tls:       protocol.ServerTLS(cert),
@@ -155,7 +208,7 @@ func newServer(cfg Config, version string, cert tls.Certificate, udp bool) *serv
 
 // serve accepts on ln until ctx ends, then closes every connection with a reason
 // and waits for its goroutines.
-func (s *server) serve(ctx context.Context, ln net.Listener, pc net.PacketConn) {
+func (s *server) serve(ctx context.Context, ln net.Listener, pc, qc net.PacketConn) {
 	httpLn := newConnListener(ln.Addr())
 	hs := &http.Server{
 		Handler:           s.routes(),
@@ -182,6 +235,11 @@ func (s *server) serve(ctx context.Context, ln net.Listener, pc net.PacketConn) 
 		s.wg.Add(1)
 		go func() { defer s.wg.Done(); s.reflect(ctx, pc) }()
 		go func() { <-ctx.Done(); pc.Close() }()
+	}
+	if qc != nil {
+		s.wg.Add(1)
+		go func() { defer s.wg.Done(); s.serveQUIC(ctx, qc) }()
+		go func() { <-ctx.Done(); qc.Close() }()
 	}
 
 	for {
@@ -249,6 +307,14 @@ func (s *server) statsLoop(ctx context.Context) {
 
 func (s *server) nodeInfo() protocol.NodeInfo {
 	return protocol.NodeInfo{Version: s.version, Load: s.store.load()}
+}
+
+// addrPort is a's port, or 0.
+func addrPort(a net.Addr) int {
+	if ap, err := netip.ParseAddrPort(a.String()); err == nil {
+		return int(ap.Port())
+	}
+	return 0
 }
 
 // remoteIP is the peer address with any IPv4-in-IPv6 mapping removed, so a client

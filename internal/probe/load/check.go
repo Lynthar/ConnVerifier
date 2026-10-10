@@ -77,8 +77,9 @@ func goodputIDs(spec phaseSpec) []string {
 	return []string{spec.name + ".goodput"}
 }
 
-// finish turns the phases and the probe streams into the tcp-load result.
-func finish(c *result.Check, phases []phaseResult, ur *echo.UDPRun, tr *echo.TCPRun, notes []result.Message, counts *protocol.LoadCounts, base idle, cfg Config) {
+// finish turns the phases and the probe streams into the tcp-load result, or the
+// quic-load result when q is set.
+func finish(c *result.Check, phases []phaseResult, ur *echo.UDPRun, tr *echo.TCPRun, notes []result.Message, counts *protocol.LoadCounts, base idle, cfg Config, q *quicPath) {
 	var lagTicks, lagOver, slipped, slipSent uint64
 	var cpuMax float64
 	for _, p := range phases {
@@ -178,7 +179,9 @@ func finish(c *result.Check, phases []phaseResult, ur *echo.UDPRun, tr *echo.TCP
 	}
 	c.NotProven = append(c.NotProven, msg("load.not_proven.bottleneck_side", nil), msg("load.not_proven.host_traffic", nil))
 	c.NotProven = append(c.NotProven, notes...)
-	evaluate(c, phases, validity{slipped: slipped, slipSent: slipSent, node: counts, cpuMax: cfg.cpuMax})
+	// Not one QUIC handshake while STAMP to the same node got answers.
+	blocked := q != nil && q.handshakes.Load() == 0 && ur != nil && len(ur.Stream.Arrivals) > 0
+	evaluate(c, phases, validity{slipped: slipped, slipSent: slipSent, node: counts, cpuMax: cfg.cpuMax, quicBlocked: blocked})
 }
 
 // validity is what the status rules need beyond the phases themselves.
@@ -186,10 +189,11 @@ type validity struct {
 	slipped, slipSent uint64               // independent probes sent late, of all sent
 	node              *protocol.LoadCounts // nil when the session end went unanswered
 	cpuMax            float64              // busy share of the available CPU at which this host counts as full
+	quicBlocked       bool                 // no QUIC handshake completed while UDP to the node got through
 }
 
-// evaluate applies the tcp-load status rules in order (method document, "Status
-// rules"); TestStatusRules mirrors that table.
+// evaluate applies the tcp-load and quic-load status rules in order (method
+// documents, "Status rules"); TestStatusRules mirrors those tables.
 func evaluate(c *result.Check, phases []phaseResult, v validity) {
 	ran, aborted := 0, 0
 	for _, p := range phases {
@@ -208,6 +212,9 @@ func evaluate(c *result.Check, phases []phaseResult, v validity) {
 	case aborted == len(phases):
 		c.Status = result.Error
 		c.Error = &result.Message{Key: "load.error.all_aborted", Params: map[string]any{"error": phases[0].err.Error()}}
+		if v.quicBlocked {
+			c.Inferences = append(c.Inferences, msg("quic_load.inference.blocked", nil))
+		}
 		return
 	}
 

@@ -41,17 +41,22 @@ func Confirm(in io.Reader, out io.Writer, interactive, yes bool, notice, prompt 
 	return ErrDeclined
 }
 
-// Check runs the check command: the idle baseline, then the load. They never
-// overlap — a path under load is not idle — and the load compares its round trips
-// with the baseline's. It returns an error only when a configuration is invalid.
+// Check runs the check command: the idle baseline, then the load over TCP, then
+// over QUIC. None overlaps another — a path under load is not idle, and two loads
+// share one bottleneck — and each load compares its round trips with the
+// baseline's. It returns an error only when a configuration is invalid.
 func Check(ctx context.Context, base baseline.Config, ld load.Config, version string) ([]result.Check, error) {
 	checks, err := baseline.Run(ctx, base, version)
 	if err != nil {
 		return nil, err
 	}
-	c, err := load.Run(ctx, ld, version, checks)
-	if err != nil {
-		return nil, err
+	idle := checks
+	for _, run := range []func(context.Context, load.Config, string, []result.Check) (result.Check, error){load.Run, load.RunQUIC} {
+		c, err := run(ctx, ld, version, idle)
+		if err != nil {
+			return nil, err
+		}
+		checks = append(checks, c)
 	}
-	return append(checks, c), nil
+	return checks, nil
 }

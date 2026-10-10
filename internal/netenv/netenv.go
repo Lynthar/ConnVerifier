@@ -2,7 +2,11 @@
 // A fact the platform cannot provide is reported as unknown, never guessed.
 package netenv
 
-import "time"
+import (
+	"os"
+	"strings"
+	"time"
+)
 
 // FDLimit returns the process's current open-file limit. The Go runtime raises
 // the soft limit to the hard limit at startup, so this is the effective value.
@@ -22,3 +26,13 @@ func EphemeralPorts() (int, bool) {
 
 // ProcessCPU returns the CPU time this process has used, user and system together.
 func ProcessCPU() (time.Duration, bool) { return processCPU() }
+
+// TCPCongestion names the host's default TCP congestion control, or "" where it
+// cannot be read (only Linux exposes it).
+func TCPCongestion() string {
+	b, err := os.ReadFile("/proc/sys/net/ipv4/tcp_congestion_control")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}

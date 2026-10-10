@@ -18,11 +18,12 @@ import (
 )
 
 // memNode is a real node in memory: TLS, HTTP/2, the load endpoints, the data
-// plane and the STAMP reflector, with no sockets.
+// plane, the STAMP reflector and HTTP/3 on its own port, with no sockets.
 type memNode struct {
 	invite string
 	ln     *memnet.Listener
 	pc     *memnet.PacketConn
+	qc     *memnet.PacketConn // nil when started with -listen-quic off
 	stop   func()
 }
 
@@ -38,9 +39,14 @@ func startNode(t *testing.T, lim node.InviteLimits, flags ...string) memNode {
 	cfg.RegisterFlags(fs)
 	fs.Parse(append([]string{"-state-dir", dir}, flags...))
 	n := memNode{invite: inv.Encode(), ln: memnet.NewListener(), pc: memnet.NewPacketConn("192.0.2.10:7443")}
+	var qc net.PacketConn
+	if !slices.Contains(flags, "off") {
+		n.qc = memnet.NewPacketConn("192.0.2.10:7444")
+		qc = n.qc
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	stopped := make(chan struct{})
-	go func() { node.ServeOn(ctx, n.ln, n.pc, cfg, "vtest"); close(stopped) }()
+	go func() { node.ServeOn(ctx, n.ln, n.pc, qc, cfg, "vtest"); close(stopped) }()
 	n.stop = func() { cancel(); <-stopped }
 	t.Cleanup(n.stop)
 	return n
@@ -56,6 +62,12 @@ func memConfig(n memNode, mb int64) Config {
 		slipLimit: time.Second, cpuMax: 2,
 		dial:    n.ln.Dial,
 		dialUDP: func(context.Context, string) (net.Conn, error) { return n.pc.Dial(), nil },
+		listenUDP: func(context.Context) (net.PacketConn, error) {
+			if n.qc == nil {
+				return nil, net.ErrClosed
+			}
+			return n.qc.Dial().PacketConn(), nil
+		},
 	}
 }
 
@@ -140,6 +152,72 @@ func TestPhasesStopAtTheTrafficLimit(t *testing.T) {
 	}
 	n.stop()
 	waitGoroutines(t, base)
+}
+
+// The same phases over HTTP/3: every one stops at its traffic limit, both sides
+// count alike, every QUIC connection is gone afterwards.
+func TestQUICPhasesStopAtTheTrafficLimit(t *testing.T) {
+	base := runtime.NumGoroutine()
+	n := startNode(t, node.DefaultInviteLimits)
+	c, err := RunQUIC(context.Background(), memConfig(n, 2), "vtest", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("status %s %v", c.Status, keys(c))
+	if c.ID != "quic-load" || c.Path.Protocol != "quic" || c.Path.Node != "192.0.2.10:7444" || c.Params["method"] != quicMethod {
+		t.Fatalf("id %s path %+v params %v", c.ID, c.Path, c.Params)
+	}
+	if c.Status == result.Error || c.Status == result.Invalid || c.Status == result.Unsupported {
+		t.Fatalf("status %s %v", c.Status, keys(c))
+	}
+	var client float64
+	for _, p := range []string{"download", "upload", "bidirectional"} {
+		b := value(t, c, p+".bytes")
+		if b < 2e6 || b > 3e6 {
+			t.Errorf("%s moved %v bytes; want the 2 MB limit plus at most a chunk per connection", p, b)
+		}
+		client += b
+	}
+	for _, id := range []string{"download.goodput", "upload.goodput", "bidirectional.goodput.download", "bidirectional.goodput.upload"} {
+		if m, _ := metric(c, id); m.Value == nil || *m.Value <= 0 {
+			t.Errorf("%s = %+v, want a positive goodput", id, m)
+		}
+	}
+	tr := c.Node.Traffic
+	if tr == nil {
+		t.Fatal("no node traffic")
+	}
+	// Both count body bytes: what was in flight when a phase ended was counted by
+	// the sender only, so either side may be ahead by that much.
+	if node := float64(tr.SentBytes + tr.ReceivedBytes); node > client+4e6 || node < client-4e6 {
+		t.Errorf("node counted %v bytes, client %v", node, client)
+	}
+	n.stop()
+	waitGoroutines(t, base)
+}
+
+// A node without HTTP/3 grants TCP when asked for QUIC; the check says so and
+// moves nothing.
+func TestNodeWithoutQUIC(t *testing.T) {
+	n := startNode(t, node.DefaultInviteLimits, "-listen-quic", "off")
+	c, _ := RunQUIC(context.Background(), memConfig(n, 2), "vtest", nil)
+	if c.Status != result.Unsupported || !slices.Contains(keys(c), "quic_load.unsupported.node_without_quic") {
+		t.Fatalf("status %s %v", c.Status, keys(c))
+	}
+	if tr := c.Node.Traffic; tr != nil && tr.SentBytes+tr.ReceivedBytes > 0 {
+		t.Fatalf("moved %+v", tr)
+	}
+}
+
+// With every QUIC datagram dropped and STAMP answered, no phase measures and the
+// result names QUIC as what failed.
+func TestQUICBlocked(t *testing.T) {
+	n := startNode(t, node.DefaultInviteLimits)
+	n.qc.Out = func([]byte) [][]byte { return nil }
+	c, _ := RunQUIC(context.Background(), memConfig(n, 2), "vtest", nil)
+	if c.Status != result.Error || !slices.Contains(keys(c), "quic_load.inference.blocked") {
+		t.Fatalf("status %s %v", c.Status, keys(c))
+	}
 }
 
 func TestNodeWithoutLoad(t *testing.T) {
@@ -250,6 +328,61 @@ func TestGoodputSettlesAtTheBottleneck(t *testing.T) {
 		}
 		if conf != result.High || m.AtLeast {
 			t.Errorf("%s: confidence %v, at least %v; want settled", id, conf, m.AtLeast)
+		}
+	}
+}
+
+// throttledPacket passes a QUIC socket's datagrams through the two directions
+// of a link.
+type throttledPacket struct {
+	net.PacketConn
+	down, up *link
+}
+
+func (c *throttledPacket) ReadFrom(p []byte) (int, net.Addr, error) {
+	n, addr, err := c.PacketConn.ReadFrom(p)
+	c.down.wait(n)
+	return n, addr, err
+}
+
+func (c *throttledPacket) WriteTo(p []byte, addr net.Addr) (int, error) {
+	c.up.wait(len(p))
+	return c.PacketConn.WriteTo(p, addr)
+}
+
+// The same bottleneck under HTTP/3: goodput, counted as body bytes, settles at
+// the bottleneck less QUIC's framing and the probes' share.
+func TestQUICGoodputSettlesAtTheBottleneck(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs for about twenty seconds")
+	}
+	const rate = 4e6
+	n := startNode(t, node.DefaultInviteLimits)
+	down, up := newLink(rate), newLink(rate)
+	cfg := memConfig(n, 100)
+	cfg.interval, cfg.phaseTime = 250*time.Millisecond, 5*time.Second
+	cfg.listenUDP = func(context.Context) (net.PacketConn, error) {
+		return &throttledPacket{PacketConn: n.qc.Dial().PacketConn(), down: down, up: up}, nil
+	}
+	c, err := RunQUIC(context.Background(), cfg, "vtest", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("status %s %v", c.Status, keys(c))
+	for _, id := range []string{"download.goodput", "upload.goodput"} {
+		m, _ := metric(c, id)
+		conf := value(t, c, strings.TrimSuffix(id, "goodput")+"goodput.confidence")
+		t.Logf("%s %v Mbit/s at least %v, confidence %v", id, *m.Value, m.AtLeast, conf)
+		if got := *m.Value; got < 0.9*rate*8/1e6 || got > 1.02*rate*8/1e6 {
+			t.Errorf("%s = %v Mbit/s; want the 32 Mbit/s bottleneck less framing and probes", id, got)
+		}
+		if conf != result.High || m.AtLeast {
+			t.Errorf("%s: confidence %v, at least %v; want settled", id, conf, m.AtLeast)
+		}
+	}
+	for _, p := range []string{"download", "upload"} {
+		if m, _ := metric(c, p+".rpm"); m.Value == nil {
+			t.Errorf("%s.rpm = %+v; want foreign and self probes over QUIC", p, m)
 		}
 	}
 }

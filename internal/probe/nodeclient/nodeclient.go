@@ -140,12 +140,9 @@ func (e *Error) Error() string {
 
 // Open asks each invite address in turn until one answers. A key that does not
 // match the pin stops the search at once: that node is not the one invited.
-func Open(ctx context.Context, inv protocol.Invite, dial DialFunc, timeout time.Duration, version, check string, want protocol.Limits) (*Session, error) {
-	body, err := json.Marshal(protocol.SessionRequest{
-		Client: protocol.ClientInfo{Name: "connverifier", Version: version},
-		Check:  check,
-		Want:   want,
-	})
+func Open(ctx context.Context, inv protocol.Invite, dial DialFunc, timeout time.Duration, version string, req protocol.SessionRequest) (*Session, error) {
+	req.Client = protocol.ClientInfo{Name: "connverifier", Version: version}
+	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}

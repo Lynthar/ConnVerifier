@@ -10,6 +10,7 @@ version follows.
 | `udp-baseline` | 1 | [udp-baseline.md](udp-baseline.md) |
 | `tcp-baseline` | 1 | [tcp-baseline.md](tcp-baseline.md) |
 | `tcp-load` | 1 | [tcp-load.md](tcp-load.md) |
+| `quic-load` | 1 | [quic-load.md](quic-load.md) |
 
 ## What each method document answers
 

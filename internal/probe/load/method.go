@@ -58,10 +58,11 @@ func trimmedMean(d []time.Duration) (float64, bool) {
 }
 
 // foreignProbe is one probe on a new connection: TCP handshake, TLS handshake
-// (one round trip in TLS 1.3, so not divided) and the HTTP exchange.
+// (one round trip in TLS 1.3, so not divided) and the HTTP exchange; over QUIC
+// the handshake is one round trip for transport and TLS together.
 type foreignProbe struct {
-	done           time.Time
-	tcp, tls, http time.Duration
+	done                 time.Time
+	tcp, tls, quic, http time.Duration
 }
 
 // selfProbe is one probe multiplexed on a load connection.
@@ -72,28 +73,36 @@ type selfProbe struct {
 
 // responsiveness is §5.3.1.1 over the given probes: the mean of the foreign and
 // the loaded round trips per minute. ok is false without probes of both kinds.
+// Over QUIC the draft gives no formula; following §5.3.1.2, each measured part
+// of the foreign probe weighs equally, so the handshake and the exchange count
+// half each.
 type responsiveness struct {
 	rpm, foreign, loaded float64
 	samples              uint64
 	ok                   bool
 }
 
-func rpmOf(foreign []foreignProbe, self []selfProbe) responsiveness {
-	var tcp, tls, fh, lh []time.Duration
+func rpmOf(foreign []foreignProbe, self []selfProbe, quic bool) responsiveness {
+	var tcp, tls, qh, fh, lh []time.Duration
 	for _, p := range foreign {
-		tcp, tls, fh = append(tcp, p.tcp), append(tls, p.tls), append(fh, p.http)
+		tcp, tls, qh, fh = append(tcp, p.tcp), append(tls, p.tls), append(qh, p.quic), append(fh, p.http)
 	}
 	for _, p := range self {
 		lh = append(lh, p.http)
 	}
 	a, ok1 := trimmedMean(tcp)
 	b, _ := trimmedMean(tls)
+	q, _ := trimmedMean(qh)
 	c, _ := trimmedMean(fh)
 	l, ok2 := trimmedMean(lh)
-	if !ok1 || !ok2 || a+b+c <= 0 || l <= 0 {
+	foreignRTT := (a + b + c) / 3
+	if quic {
+		foreignRTT = (q + c) / 2
+	}
+	if !ok1 || !ok2 || foreignRTT <= 0 || l <= 0 {
 		return responsiveness{}
 	}
-	f, s := 60000/((a+b+c)/3), 60000/l
+	f, s := 60000/foreignRTT, 60000/l
 	return responsiveness{rpm: (f + s) / 2, foreign: f, loaded: s, samples: uint64(len(foreign) + len(self)), ok: true}
 }
 

@@ -46,7 +46,7 @@ func startNode(t *testing.T, udpPort int, reflector bool) memNode {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	stopped := make(chan struct{})
-	go func() { node.ServeOn(ctx, n.ln, pc, cfg, "vtest"); close(stopped) }()
+	go func() { node.ServeOn(ctx, n.ln, pc, nil, cfg, "vtest"); close(stopped) }()
 	n.stop = func() { cancel(); <-stopped }
 	t.Cleanup(n.stop)
 	return n

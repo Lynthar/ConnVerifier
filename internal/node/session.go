@@ -101,9 +101,10 @@ func (s *store) load() protocol.Load {
 }
 
 // create grants want within the invite's limits; ip is where the request came
-// from. It returns the API error reason when the invite or the node has no room
-// for another session. Load that cannot be granted now does not refuse the session.
-func (s *store) create(invite string, lim InviteLimits, want protocol.Limits, ip netip.Addr, now time.Time) (*session, string) {
+// from, quic whether load goes over HTTP/3. It returns the API error reason when
+// the invite or the node has no room for another session. Load that cannot be
+// granted now does not refuse the session.
+func (s *store) create(invite string, lim InviteLimits, want protocol.Limits, ip netip.Addr, quic bool, now time.Time) (*session, string) {
 	g := protocol.Limits{
 		Connections:  min(want.Connections, lim.MaxConnections),
 		DialRate:     min(want.DialRate, lim.MaxDialRate),
@@ -141,7 +142,7 @@ func (s *store) create(invite string, lim InviteLimits, want protocol.Limits, ip
 		s.bySSID[sess.stamp.ssid] = sess
 	}
 	if want.LoadBytes > 0 && lim.MaxLoadBytes > 0 && s.maxLoadSessions > 0 {
-		s.grantLoad(sess, lim, want, ip, now)
+		s.grantLoad(sess, lim, want, ip, quic, now)
 	}
 	s.sessions[sess.id] = sess
 	s.perInvite[invite]++
@@ -150,7 +151,7 @@ func (s *store) create(invite string, lim InviteLimits, want protocol.Limits, ip
 
 // grantLoad charges the grant to the invite's day at once, so sessions in
 // parallel cannot overrun it; end returns what was not used. Callers hold s.mu.
-func (s *store) grantLoad(sess *session, lim InviteLimits, want protocol.Limits, ip netip.Addr, now time.Time) {
+func (s *store) grantLoad(sess *session, lim InviteLimits, want protocol.Limits, ip netip.Addr, quic bool, now time.Time) {
 	day := now.UTC().Truncate(24 * time.Hour)
 	d := s.daily[sess.invite]
 	if d == nil || !d.day.Equal(day) {
@@ -168,7 +169,7 @@ func (s *store) grantLoad(sess *session, lim InviteLimits, want protocol.Limits,
 		conns := min(want.LoadConnections, lim.MaxLoadConnections)
 		d.used += bytes
 		s.loadSessions++
-		sess.load = newLoadState(ip, bytes, conns, day, now)
+		sess.load = newLoadState(ip, quic, bytes, conns, day, now)
 		sess.loadAns = &protocol.LoadGrant{Bytes: bytes, Connections: conns}
 	}
 }
@@ -181,6 +182,20 @@ func (s *store) loadAllowance(ip netip.Addr) int {
 	n := 0
 	for _, sess := range s.sessions {
 		if sess.load != nil && sess.load.ip == ip {
+			n += sess.load.conns
+		}
+	}
+	return n
+}
+
+// quicAllowance is how many HTTP/3 connections may come from ip: the load
+// connections of its live sessions granted load over HTTP/3.
+func (s *store) quicAllowance(ip netip.Addr) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, sess := range s.sessions {
+		if sess.load != nil && sess.load.quic && sess.load.ip == ip {
 			n += sess.load.conns
 		}
 	}

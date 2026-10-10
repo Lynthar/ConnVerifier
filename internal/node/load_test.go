@@ -27,16 +27,16 @@ var clientIP = netip.MustParseAddr("192.0.2.1")
 func TestLoadGrantsOneSessionAtATime(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	st := newStore(100, 8, 1, now)
-	first, _ := st.create("inv", DefaultInviteLimits, loadWant(10<<30, 100), clientIP, now)
+	first, _ := st.create("inv", DefaultInviteLimits, loadWant(10<<30, 100), clientIP, false, now)
 	if g := first.loadAns; g == nil || g.Bytes != DefaultInviteLimits.MaxLoadBytes || g.Connections != DefaultInviteLimits.MaxLoadConnections {
 		t.Fatalf("first grant %+v, want the invite's caps", g)
 	}
-	second, reason := st.create("inv", DefaultInviteLimits, loadWant(1<<20, 4), clientIP, now)
+	second, reason := st.create("inv", DefaultInviteLimits, loadWant(1<<20, 4), clientIP, false, now)
 	if reason != "" || second.load != nil || second.loadAns.Refused != protocol.ErrReasonBusy || second.loadAns.RetryAfterS != loadRetryS {
 		t.Fatalf("second session: %q %+v; want the session, with load refused busy", reason, second.loadAns)
 	}
 	st.end(func(s *session) bool { return s == first })
-	third, _ := st.create("inv", DefaultInviteLimits, loadWant(1<<20, 4), clientIP, now)
+	third, _ := st.create("inv", DefaultInviteLimits, loadWant(1<<20, 4), clientIP, false, now)
 	if third.load == nil {
 		t.Fatalf("after the first ended: %+v, want a grant", third.loadAns)
 	}
@@ -56,7 +56,7 @@ func TestLoadWithoutOfferOrAsking(t *testing.T) {
 		"session asks for no load": {DefaultInviteLimits, 1, want(1)},
 	} {
 		st := newStore(100, 8, tt.maxLoad, now)
-		sess, _ := st.create("inv", tt.lim, tt.want, clientIP, now)
+		sess, _ := st.create("inv", tt.lim, tt.want, clientIP, false, now)
 		if sess.load != nil || sess.loadAns != nil {
 			t.Errorf("%s: load %+v", name, sess.loadAns)
 		}
@@ -71,24 +71,24 @@ func TestLoadDailyQuota(t *testing.T) {
 	lim.MaxSessions, lim.MaxLoadBytes, lim.MaxLoadBytesPerDay = 8, 60, 100
 	st := newStore(100, 8, 4, now)
 
-	a, _ := st.create("inv", lim, loadWant(1000, 4), clientIP, now)
+	a, _ := st.create("inv", lim, loadWant(1000, 4), clientIP, false, now)
 	a.load.sent.Add(10)
 	st.end(func(s *session) bool { return s == a }) // 50 of 60 unused: back to the day
-	b, _ := st.create("inv", lim, loadWant(1000, 4), clientIP, now)
-	c, _ := st.create("inv", lim, loadWant(1000, 4), clientIP, now)
+	b, _ := st.create("inv", lim, loadWant(1000, 4), clientIP, false, now)
+	c, _ := st.create("inv", lim, loadWant(1000, 4), clientIP, false, now)
 	if b.loadAns.Bytes != 60 || c.loadAns.Bytes != 30 {
 		t.Fatalf("grants %d and %d after 10 used, want 60 and 30", b.loadAns.Bytes, c.loadAns.Bytes)
 	}
-	d, _ := st.create("inv", lim, loadWant(1000, 4), clientIP, now)
+	d, _ := st.create("inv", lim, loadWant(1000, 4), clientIP, false, now)
 	if d.loadAns.Refused != protocol.ErrReasonQuota || d.loadAns.RetryAfterS != 3601 {
 		t.Fatalf("over the day: %+v, want quota with retry at midnight", d.loadAns)
 	}
-	other, _ := st.create("other-inv", lim, loadWant(1000, 4), clientIP, now)
+	other, _ := st.create("other-inv", lim, loadWant(1000, 4), clientIP, false, now)
 	if other.load == nil {
 		t.Fatalf("another invite's day is its own: %+v", other.loadAns)
 	}
 	st.end(func(s *session) bool { return true })
-	next, _ := st.create("inv", lim, loadWant(1000, 4), clientIP, now.Add(2*time.Hour))
+	next, _ := st.create("inv", lim, loadWant(1000, 4), clientIP, false, now.Add(2*time.Hour))
 	if next.loadAns.Bytes != 60 {
 		t.Fatalf("next day: %+v, want a fresh 60", next.loadAns)
 	}
@@ -97,7 +97,7 @@ func TestLoadDailyQuota(t *testing.T) {
 func TestLoadAllowancePerAddress(t *testing.T) {
 	now := time.Now()
 	st := newStore(100, 8, 2, now)
-	st.create("inv", DefaultInviteLimits, loadWant(1<<20, 20), clientIP, now)
+	st.create("inv", DefaultInviteLimits, loadWant(1<<20, 20), clientIP, false, now)
 	if a, b := st.loadAllowance(clientIP), st.loadAllowance(netip.MustParseAddr("192.0.2.2")); a != 20 || b != 0 {
 		t.Fatalf("allowance %d for the session's address and %d for another; want 20 and 0", a, b)
 	}
@@ -212,7 +212,7 @@ func TestLoadStreamsOutliveRequestTimeouts(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ln := memnet.NewListener()
-	go s.serve(ctx, ln, nil)
+	go s.serve(ctx, ln, nil, nil)
 	tr := &http.Transport{
 		DialContext:       func(ctx context.Context, _, _ string) (net.Conn, error) { return ln.Dial(ctx, "", "") },
 		TLSClientConfig:   protocol.ClientTLS(protocol.Pin(s.tls.Certificates[0].Leaf)),

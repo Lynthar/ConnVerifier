@@ -257,5 +257,15 @@
   "metric.wait": "阶段前等队列排空的时间",
   "load.inference.connect_failures": "{phase}：有 {count} 条负载连接在 {timeout_ms} 内没建起来，本阶段用其余的连接继续。路径跑满时，连新建连接都这么难。",
   "load.not_proven.foreign_failed": "{phase}：有 {count} 个新连接请求没完成，没计入响应度，所以响应度比路径实际的要好看。",
-  "load.not_proven.queue_not_drained": "{phase}：等了 {wait_ms}，上一阶段的队列还没排空，本阶段是在更满的路径上开始的。"
+  "load.not_proven.queue_not_drained": "{phase}：等了 {wait_ms}，上一阶段的队列还没排空，本阶段是在更满的路径上开始的。",
+
+  "check.quic-load.title": "QUIC 跑满：goodput 与响应度",
+  "param.quic_go": "QUIC 实现（quic-go）",
+  "metric.host.udp_receive_buffer": "本机 UDP 接收缓冲",
+  "metric.host.udp_send_buffer": "本机 UDP 发送缓冲",
+  "node.tcp_congestion": "节点的 TCP 拥塞控制",
+  "quic_load.unsupported.node_without_quic": "节点不提供 HTTP/3 负载（没开 QUIC 端口，或版本较旧）；请节点主人升级节点或开放 QUIC 端口。",
+  "quic_load.error.address": "算不出节点的 QUIC 地址：{error}",
+  "quic_load.inference.blocked": "到节点的 UDP 通，QUIC 握手却全部失败：路径上可能有设备识别并拦截了 QUIC，或节点的 QUIC 端口没有放行。",
+  "quic_load.not_proven.udp_buffer": "本机 UDP 缓冲（见观测里的两项）小于 quic-go 要的 {wanted_mib} MiB；高速或长往返时 QUIC 可能在本机丢包，goodput 偏低。Linux 上可用 sysctl 调大 net.core.rmem_max 与 net.core.wmem_max。"
 }

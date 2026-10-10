@@ -139,7 +139,7 @@ func Run(ctx context.Context, cfg Config, version string) (c result.Check, err e
 	c = newCheck(cfg, inv.Addrs[0], inv.Label)
 	defer func() { c.ElapsedMs = time.Since(start).Milliseconds() }()
 
-	sess, err := nodeclient.Open(ctx, inv, dial, cfg.dialTimeout, version, protocol.CheckTCPCapacity, cfg.want())
+	sess, err := nodeclient.Open(ctx, inv, dial, cfg.dialTimeout, version, protocol.SessionRequest{Check: protocol.CheckTCPCapacity, Want: cfg.want()})
 	if err != nil {
 		var se *nodeclient.Error
 		if errors.As(err, &se) {

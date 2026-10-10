@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -53,7 +54,7 @@ func (p *PacketConn) Dial() *Conn {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.next++
-	ap := netip.AddrPortFrom(netip.MustParseAddr("192.0.2.200"), p.next)
+	ap := netip.AddrPortFrom(clientHost, p.next)
 	c := &Conn{p: p, addr: net.UDPAddrFromAddrPort(ap), in: make(chan []byte, 4096), dl: newDeadline(), done: make(chan struct{})}
 	p.conns[ap] = c
 	return c
@@ -162,6 +163,19 @@ func (c *Conn) SetDeadline(t time.Time) error     { c.dl.set(t); return nil }
 func (c *Conn) SetReadDeadline(t time.Time) error { c.dl.set(t); return nil }
 func (c *Conn) SetWriteDeadline(time.Time) error  { return nil }
 
+// PacketConn returns c as an unconnected socket for code that sends with
+// WriteTo, such as QUIC: every datagram goes to c's node whatever the address.
+func (c *Conn) PacketConn() net.PacketConn { return packetConn{c} }
+
+type packetConn struct{ *Conn }
+
+func (p packetConn) ReadFrom(b []byte) (int, net.Addr, error) {
+	n, err := p.Read(b)
+	return n, p.RemoteAddr(), err
+}
+
+func (p packetConn) WriteTo(b []byte, _ net.Addr) (int, error) { return p.Write(b) }
+
 func apply(f Filter, b []byte) [][]byte {
 	cp := append([]byte(nil), b...)
 	if f == nil {
@@ -225,13 +239,26 @@ func isClosed(ch chan struct{}) bool {
 	}
 }
 
+// clientHost is the one client every Conn and stream comes from, so a node sees
+// a session's control connection and its datagrams from the same address.
+var clientHost = netip.MustParseAddr("192.0.2.200")
+
 // Listener is a stream listener fed by net.Pipe ends, so a real node can serve
 // TCP in memory.
 type Listener struct {
 	conns chan net.Conn
 	done  chan struct{}
 	once  sync.Once
+	next  atomic.Uint32
 }
+
+// fromClient is a pipe's node end, seen as coming from clientHost.
+type fromClient struct {
+	net.Conn
+	remote net.Addr
+}
+
+func (c fromClient) RemoteAddr() net.Addr { return c.remote }
 
 func NewListener() *Listener {
 	return &Listener{conns: make(chan net.Conn), done: make(chan struct{})}
@@ -257,8 +284,10 @@ func (l *Listener) Addr() net.Addr { return &net.TCPAddr{} }
 // ignored, so it fits wherever a dial function is expected.
 func (l *Listener) Dial(ctx context.Context, _, _ string) (net.Conn, error) {
 	c, s := net.Pipe()
+	port := uint16(20000 + l.next.Add(1)%40000)
+	remote := net.TCPAddrFromAddrPort(netip.AddrPortFrom(clientHost, port))
 	select {
-	case l.conns <- s:
+	case l.conns <- fromClient{Conn: s, remote: remote}:
 		return c, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()

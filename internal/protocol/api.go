@@ -33,7 +33,13 @@ const MaxBody = 4096
 const (
 	CheckTCPCapacity = "tcp-capacity"
 	CheckBaseline    = "baseline" // udp-baseline and tcp-baseline, side by side
-	CheckLoad        = "load"     // tcp-load: load endpoints, with STAMP and an echo connection beside them
+	CheckLoad        = "load"     // tcp-load or quic-load: load endpoints, with STAMP and an echo connection beside them
+)
+
+// Transports a load session may ask for; "" is TCP.
+const (
+	TransportTCP  = "tcp"  // HTTP/2 over TLS on the node's TCP port
+	TransportQUIC = "quic" // HTTP/3 on the node's QUIC port
 )
 
 // Error reasons in an ErrorResponse.
@@ -107,14 +113,21 @@ type ClientInfo struct {
 }
 
 type SessionRequest struct {
-	Client ClientInfo `json:"client"`
-	Check  string     `json:"check"`
-	Want   Limits     `json:"want"`
+	Client    ClientInfo `json:"client"`
+	Check     string     `json:"check"`
+	Transport string     `json:"transport,omitempty"` // of a load session
+	Want      Limits     `json:"want"`
 }
 
 func (r *SessionRequest) Validate() error {
 	if err := shortStrings(r.Client.Name, r.Client.Version, r.Check); err != nil {
 		return err
+	}
+	switch {
+	case r.Transport == "" || r.Transport == TransportTCP:
+	case r.Transport == TransportQUIC && r.Check == CheckLoad:
+	default:
+		return errors.New("transport must be tcp, or quic for a load session")
 	}
 	return r.Want.validate(false)
 }
@@ -158,23 +171,40 @@ type SessionResponse struct {
 
 // LoadGrant is a session's allowance on the load endpoints: Bytes is its budget
 // in both directions together, Connections how many load connections it may hold.
-// A node that offers load but cannot grant it now sets only Refused (ErrReasonBusy
-// or ErrReasonQuota) and RetryAfterS; a node that offers none omits the grant.
+// QUIC is set when the grant is for HTTP/3; a node that ignores the asked
+// transport grants TCP and omits it. TCPCongestion names the node's TCP
+// congestion control where it can tell. A node that offers load but cannot grant
+// it now sets only Refused (ErrReasonBusy or ErrReasonQuota) and RetryAfterS; a
+// node that offers none omits the grant.
 type LoadGrant struct {
-	Bytes       int64  `json:"bytes,omitempty"`
-	Connections int    `json:"connections,omitempty"`
-	Refused     string `json:"refused,omitempty"`
-	RetryAfterS int    `json:"retry_after_s,omitempty"`
+	Bytes         int64      `json:"bytes,omitempty"`
+	Connections   int        `json:"connections,omitempty"`
+	QUIC          *QUICGrant `json:"quic,omitempty"`
+	TCPCongestion string     `json:"tcp_congestion,omitempty"`
+	Refused       string     `json:"refused,omitempty"`
+	RetryAfterS   int        `json:"retry_after_s,omitempty"`
+}
+
+// QUICGrant is where the node serves HTTP/3: Port, on the host of the address
+// the session was opened on.
+type QUICGrant struct {
+	Port int `json:"port"`
 }
 
 func (g *LoadGrant) validate() error {
+	if err := shortStrings(g.TCPCongestion); err != nil {
+		return err
+	}
 	switch g.Refused {
 	case "":
 		if g.Bytes < 1 || g.Bytes > MaxLoadBytes || g.Connections < 1 || g.Connections > MaxLoadConns {
 			return errors.New("load grant out of range")
 		}
+		if g.QUIC != nil && (g.QUIC.Port < 1 || g.QUIC.Port > 65535) {
+			return errors.New("load grant: quic port out of range")
+		}
 	case ErrReasonBusy, ErrReasonQuota:
-		if g.Bytes != 0 || g.Connections != 0 || g.RetryAfterS < 0 || g.RetryAfterS > 24*3600 {
+		if g.Bytes != 0 || g.Connections != 0 || g.QUIC != nil || g.RetryAfterS < 0 || g.RetryAfterS > 24*3600 {
 			return errors.New("refused load grant carries a grant")
 		}
 	default:

@@ -31,7 +31,8 @@ const usage = `usage: connverifier <command> [flags]
 
 commands:
   check      measure round trip, its variation and UDP loss to a node, idle and
-             with the path loaded, and the goodput of the load
+             with the path loaded over TCP and over QUIC, and the goodput of
+             each load
   capacity   hold N long-lived TCP connections against a node and report drops
   serve      run a node that clients measure against
   invite     create, list or revoke the invites a node accepts
@@ -120,7 +121,7 @@ func main() {
 		runInvite(args)
 	case "version":
 		parse(cmd, args, func(*flag.FlagSet) {})
-		fmt.Printf("connverifier %s %s %s/%s\n", buildVersion(), runtime.Version(), runtime.GOOS, runtime.GOARCH)
+		fmt.Printf("connverifier %s %s %s/%s quic-go %s\n", buildVersion(), runtime.Version(), runtime.GOOS, runtime.GOARCH, load.QUICGoVersion())
 	case "help", "-h", "-help", "--help":
 		fmt.Fprint(os.Stdout, usage)
 	default:

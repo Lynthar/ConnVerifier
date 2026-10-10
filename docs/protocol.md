@@ -1,7 +1,8 @@
 # Node protocol, version 2
 
-A node serves clients on **one TCP port**, and answers STAMP on a UDP port — by
-default the same number. The first byte a client sends on TCP decides what the
+A node serves clients on **one TCP port**, answers STAMP on a UDP port — by
+default the same number — and serves load over HTTP/3 on another UDP port, by
+default the TCP port + 1. The first byte a client sends on TCP decides what the
 connection is:
 
 | First byte | Connection |
@@ -53,7 +54,9 @@ Every request carries `Authorization: Bearer <token>`. Bodies are JSON of at mos
 }
 ```
 
-`check` is `tcp-capacity`, `baseline` or `load`. A `baseline` or `load` session may
+`check` is `tcp-capacity`, `baseline` or `load`. A `load` session may also carry
+`"transport": "quic"` to run its load over HTTP/3; absent or `"tcp"`, it runs over
+this TLS port. A `baseline` or `load` session may
 also ask for `stamp_rate`, STAMP packets per second; a node without a reflector,
 or a `tcp-capacity` session, is granted none. A `load` session also asks for
 `load_bytes`, its traffic on the load endpoints in both directions together, and
@@ -86,7 +89,10 @@ lifetime.
 
 A `load` session's response carries `"load": {"bytes": N, "connections": N}`, each
 the smaller of asked and allowed, `bytes` also no more than what is left of the
-invite's daily load traffic. When the node offers load but cannot grant it now, the
+invite's daily load traffic. A grant over HTTP/3 adds `"quic": {"port": N}`, the
+node's QUIC port on the host the session was opened on; a node without HTTP/3
+ignores the asked transport and grants TCP, without `quic`. A grant may add
+`"tcp_congestion": "<name>"`, the node's TCP congestion control where it can tell. When the node offers load but cannot grant it now, the
 session is still created and `load` holds only `{"refused": "busy" | "quota",
 "retry_after_s": N}`: `busy` when another session holds the node's load slots,
 `quota` when the invite has used its daily traffic, retrying after the next UTC
@@ -125,6 +131,20 @@ serving them one after another, advertises the smallest frame size (16 KiB),
 writes downloads one frame at a time, and on Linux and macOS keeps at most 5 ms of
 a download's throughput unsent in the kernel. Its receive window is 16 MiB per
 stream and per connection.
+
+### HTTP/3
+
+The node's QUIC port serves only the three load endpoints above, over HTTP/3 (QUIC
+version 1, ALPN `h3`, TLS 1.3 with the same certificate and pin). It completes a
+handshake only for a source address holding a live load session granted over
+HTTP/3, and holds at most that address's granted `load_connections` plus 8
+connections from it at once — counted from the first Initial until the connection
+closes, the 8 leaving room for closes still queued behind the load. A connection
+beyond that is refused before its handshake completes. Above 50 new handshakes a second from one address it
+asks for a Retry first. Its handshake timeout is 15 s; its receive window is
+16 MiB per stream and per connection. It offers no 0-RTT, no datagrams and sends
+no keepalive. Requests carry no `Priority` header, and streams of one connection
+are served interleaved.
 
 ### Refusals
 
@@ -226,7 +246,8 @@ request.
 | Sessions with load at once on the node | 1 (0: no load offered) | `serve -max-load-sessions` |
 | Load traffic per session | 2 000 MB (0: no load) | `invite create -max-load-mb` |
 | Load traffic per invite per UTC day, counted in memory and reset when the node restarts | 20 000 MB | `invite create -max-load-mb-per-day` |
-| Load connections per session | 48 | `invite create -max-load-connections` |
+| Load connections per session, TCP or QUIC | 48 | `invite create -max-load-connections` |
+| HTTP/3 port | the TCP port + 1 (`off`: none) | `serve -listen-quic`; `serve -quic-port` sets the port granted, behind a port mapping |
 | Connections not yet past TLS or HELLO | 32 per address, 1 024 in total, plus the load connections of the address's live load sessions | fixed |
 | Open control-plane connections | 8 per address, 512 in total, plus the same | fixed |
 | Control-plane requests | 10 per second per address; load requests of a live load session are not counted | fixed |

@@ -81,27 +81,41 @@ func fillStream(s *echo.Stream, p []phaseResult) {
 	}
 }
 
-func goldenCheck() result.Check {
+// goldenCheck is a made-up tcp-load, or with quic a quic-load whose sockets got
+// Linux's default UDP buffers.
+func goldenCheck(quic bool) result.Check {
 	cfg := Config{interval: time.Second, phaseTime: 20 * time.Second, phaseMB: 500, rate: 50, slipLimit: echo.DefaultSlipLimit, cpuMax: 0.875}
 	ph := syntheticPhases()
 	ur, tr := &echo.UDPRun{End: at(60)}, &echo.TCPRun{End: at(60)}
 	fillStream(&ur.Stream, ph)
 	fillStream(&tr.Stream, ph)
+	id, proto, params, addr := "tcp-load", "tcp", cfg.params(), "192.0.2.10:7443"
+	if quic {
+		id, proto, params, addr = "quic-load", "quic", cfg.quicParams("v0.0.0-golden"), "192.0.2.10:7444"
+	}
 	c := result.Check{
-		ID: "tcp-load", MethodVersion: 1, ElapsedMs: 52_400,
-		Path:    result.Path{Node: "192.0.2.10:7443", Family: "ipv4", Protocol: "tcp"},
-		Params:  cfg.params(),
+		ID: id, MethodVersion: 1, ElapsedMs: 52_400,
+		Path:    result.Path{Node: addr, Family: "ipv4", Protocol: proto},
+		Params:  params,
 		Metrics: []result.Metric{},
 		Node: &result.NodeReport{
 			Label: "example", Version: "v0.0.0-golden", ObservedAddr: "198.51.100.7:51234",
-			Granted:   &result.Grant{Connections: 1, DialRate: 1, DurationS: 82, IdleTimeoutS: 60, StampRate: 100, LoadBytes: 1_510_000_000, LoadConnections: 40},
-			LoadStart: &result.NodeLoad{Sessions: 1, MaxConnections: 20000, UptimeS: 3700},
-			LoadEnd:   &result.NodeLoad{MaxConnections: 20000, UptimeS: 3752},
-			Traffic:   &result.Traffic{SentBytes: 235_123_456, ReceivedBytes: 171_234_567, LagTicks: 5200, LagOver: 3},
+			Granted:       &result.Grant{Connections: 1, DialRate: 1, DurationS: 82, IdleTimeoutS: 60, StampRate: 100, LoadBytes: 1_510_000_000, LoadConnections: 40},
+			LoadStart:     &result.NodeLoad{Sessions: 1, MaxConnections: 20000, UptimeS: 3700},
+			LoadEnd:       &result.NodeLoad{MaxConnections: 20000, UptimeS: 3752},
+			Traffic:       &result.Traffic{SentBytes: 235_123_456, ReceivedBytes: 171_234_567, LagTicks: 5200, LagOver: 3},
+			TCPCongestion: "cubic",
 		},
 	}
 	base := idle{udpP50: 31.2, udpP95: 35.4, tcpP50: 31.5, tcpP95: 36.1}
-	finish(&c, ph, ur, tr, nil, &protocol.LoadCounts{LagTicks: 5200, LagOver: 3}, base, cfg)
+	var q *quicPath
+	var notes []result.Message
+	if quic {
+		q = &quicPath{recv: 425_984, send: 425_984}
+		q.handshakes.Store(48)
+		notes = bufferFacts(&c, q)
+	}
+	finish(&c, ph, ur, tr, notes, &protocol.LoadCounts{LagTicks: 5200, LagOver: 3}, base, cfg, q)
 	return c
 }
 
@@ -109,7 +123,7 @@ func TestResultGolden(t *testing.T) {
 	run := result.Run{
 		Schema: result.Schema, Tool: result.Tool{Name: "connverifier", Version: "v0.0.0-golden", Go: "go1.27.0", OS: "linux", Arch: "amd64"},
 		RunID: "golden", Started: t0, Ended: at(52.4), ElapsedMs: 52_400,
-		Checks: []result.Check{goldenCheck()},
+		Checks: []result.Check{goldenCheck(false), goldenCheck(true)},
 	}
 	outputs := map[string]func(*bytes.Buffer) error{
 		"run.json": func(b *bytes.Buffer) error { return report.JSON(b, run) },
@@ -157,7 +171,8 @@ func TestTextHasNoRawKeys(t *testing.T) {
 		f(&c)
 		checks = append(checks, c)
 	}
-	add(func(c *result.Check) { *c = goldenCheck() })
+	add(func(c *result.Check) { *c = goldenCheck(false) })
+	add(func(c *result.Check) { *c = goldenCheck(true) })
 	for _, f := range []func(*phaseResult){
 		func(p *phaseResult) { p.lagOver, p.cpuBusy, p.capped, p.gpConf = 50, 0.95, true, []int{result.Low} },
 		func(p *phaseResult) { p.stopped, p.err = stopError, broke },
@@ -179,13 +194,16 @@ func TestTextHasNoRawKeys(t *testing.T) {
 		for i := range p {
 			p[i].stopped, p[i].err = stopError, broke
 		}
-		evaluate(c, p, validity{})
+		evaluate(c, p, validity{quicBlocked: true})
 	})
-	for _, key := range []string{"load.unsupported.node_without_load", "load.not_proven.no_udp_probe", "load.warning.duration_not_granted"} {
+	for _, key := range []string{"load.unsupported.node_without_load", "load.not_proven.no_udp_probe", "load.warning.duration_not_granted", "quic_load.unsupported.node_without_quic"} {
 		add(func(c *result.Check) {
 			c.Warnings = []result.Message{{Key: key, Params: map[string]any{"granted_ms": 5000}}}
 		})
 	}
+	add(func(c *result.Check) {
+		c.Error = &result.Message{Key: "quic_load.error.address", Params: map[string]any{"error": "x"}}
+	})
 	for _, reason := range []string{protocol.ErrReasonBusy, protocol.ErrReasonQuota} {
 		add(func(c *result.Check) {
 			c.Error = &result.Message{Key: "load.error.refused_" + reason, Params: map[string]any{"retry_after_ms": 60000}}
@@ -196,7 +214,7 @@ func TestTextHasNoRawKeys(t *testing.T) {
 		c.Warnings = []result.Message{Config{phaseMB: 500}.Notice()}
 	})
 	run := result.Run{Checks: checks}
-	rawKey := regexp.MustCompile(`\b(load|baseline|scope|stop|level|metric|param|label|section|status|check|line|value|node)\.[A-Za-z_]`)
+	rawKey := regexp.MustCompile(`\b(load|quic_load|baseline|scope|stop|level|metric|param|label|section|status|check|line|value|node)\.[A-Za-z_]`)
 	for _, lang := range i18n.Supported {
 		cat, err := i18n.Load(lang)
 		if err != nil {

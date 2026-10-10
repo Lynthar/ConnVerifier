@@ -53,12 +53,23 @@ func TestTrimmedMean(t *testing.T) {
 func TestRPM(t *testing.T) {
 	f := []foreignProbe{{tcp: 30 * time.Millisecond, tls: 30 * time.Millisecond, http: 60 * time.Millisecond}}
 	s := []selfProbe{{http: 100 * time.Millisecond}}
-	r := rpmOf(f, s)
+	r := rpmOf(f, s, false)
 	if !r.ok || math.Abs(r.foreign-1500) > 1e-9 || math.Abs(r.loaded-600) > 1e-9 || math.Abs(r.rpm-1050) > 1e-9 || r.samples != 2 {
 		t.Fatalf("rpmOf = %+v", r)
 	}
-	if rpmOf(f, nil).ok || rpmOf(nil, s).ok {
+	if rpmOf(f, nil, false).ok || rpmOf(nil, s, false).ok {
 		t.Fatal("RPM from one kind of probe only")
+	}
+}
+
+// Over QUIC the handshake and the exchange weigh half each: 40 and 60 ms average
+// 50 ms, 1200 RPM; with the same loaded 600, responsiveness 900.
+func TestRPMQUIC(t *testing.T) {
+	f := []foreignProbe{{quic: 40 * time.Millisecond, http: 60 * time.Millisecond}}
+	s := []selfProbe{{http: 100 * time.Millisecond}}
+	r := rpmOf(f, s, true)
+	if !r.ok || math.Abs(r.foreign-1200) > 1e-9 || math.Abs(r.loaded-600) > 1e-9 || math.Abs(r.rpm-900) > 1e-9 {
+		t.Fatalf("rpmOf = %+v", r)
 	}
 }
 

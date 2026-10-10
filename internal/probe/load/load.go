@@ -1,7 +1,8 @@
-// Package load runs the tcp-load check: it loads the path to a node until goodput
-// and responsiveness settle (draft-ietf-ippm-responsiveness-09 §5) in three
-// phases — download, upload, both — while the baseline's STAMP and echo streams
-// keep running beside the load as independent probes.
+// Package load runs the tcp-load and quic-load checks: each loads the path to a
+// node until goodput and responsiveness settle (draft-ietf-ippm-responsiveness-09
+// §5) in three phases — download, upload, both — over HTTP/2 on TCP or HTTP/3 on
+// QUIC, while the baseline's STAMP and echo streams keep running beside the load
+// as independent probes.
 package load
 
 import (
@@ -13,7 +14,9 @@ import (
 	"math/rand/v2"
 	"net"
 	"runtime"
+	"runtime/debug"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -36,8 +39,12 @@ const (
 	maxDrain   = 10 * time.Second
 	drainEvery = 250 * time.Millisecond
 	// connectTimeout bounds opening a load connection or a foreign probe: TCP and
-	// TLS handshakes cross the loaded queue, seconds deep on a bloated uplink.
+	// TLS handshakes, or QUIC's, cross the loaded queue, seconds deep on a bloated
+	// uplink. The node waits as long for a QUIC handshake.
 	connectTimeout = 15 * time.Second
+	// quicBuffer is the UDP buffer quic-go asks for; a socket that got less may
+	// drop packets of a fast or long path before quic-go reads them.
+	quicBuffer     = 7 << 20
 	tmax           = 3 * time.Second // independent probes' waiting time, as in the baseline
 	sessionMargin  = 10 * time.Second
 	probeAllowance = 10_000_000 // bytes the session asks for beyond the phases, for probes
@@ -57,6 +64,7 @@ type Config struct {
 	cpuMax    float64
 	dial      nodeclient.DialFunc
 	dialUDP   func(ctx context.Context, address string) (net.Conn, error)
+	listenUDP func(ctx context.Context) (net.PacketConn, error) // a QUIC connection's socket
 }
 
 // RegisterFlags binds the load flags to fs; -node, -rate and -dial-timeout belong
@@ -85,8 +93,9 @@ func (cfg Config) Validate() error {
 	return nil
 }
 
-// MaxMB is the most traffic the load phases may move, announced before the run.
-func (cfg Config) MaxMB() int64 { return int64(len(phases)) * cfg.phaseMB }
+// MaxMB is the most traffic the load phases of both checks may move, announced
+// before the run.
+func (cfg Config) MaxMB() int64 { return 2 * int64(len(phases)) * cfg.phaseMB }
 
 // Large reports whether the run moves more than the default allows; such a run
 // starts only after the user agrees.
@@ -94,7 +103,7 @@ func (cfg Config) Large() bool { return cfg.phaseMB > defaultPhaseMB }
 
 // Notice says how much traffic the load phases may move.
 func (cfg Config) Notice() result.Message {
-	return result.Message{Key: "load.notice", Params: map[string]any{"mb": cfg.MaxMB(), "phase_mb": cfg.phaseMB, "phases": len(phases)}}
+	return result.Message{Key: "load.notice", Params: map[string]any{"mb": cfg.MaxMB(), "phase_mb": cfg.phaseMB, "phases": 2 * len(phases)}}
 }
 
 func (cfg Config) stage() time.Duration {
@@ -128,11 +137,46 @@ func (cfg Config) params() map[string]any {
 	}
 }
 
-// Run opens a load session on the node, runs the three phases and returns the
-// tcp-load result. baseline holds the idle checks run just before, whose round
-// trips the loaded ones are compared with. It returns an error only when cfg is
-// invalid.
-func Run(ctx context.Context, cfg Config, version string, baseline []result.Check) (c result.Check, err error) {
+// quicMethod names the quic-load method: the draft's over HTTP/3, its foreign
+// responsiveness weighted as §5.3.1.2 does where a handshake part is missing.
+const quicMethod = "draft-ietf-ippm-responsiveness-09 (HTTP/3)"
+
+// quicParams are the quic-load parameters: tcp-load's, its method, and the
+// quic-go version built in, whose congestion control the result depends on.
+func (cfg Config) quicParams(quicGo string) map[string]any {
+	p := cfg.params()
+	p["method"] = quicMethod
+	p["quic_go"] = quicGo
+	return p
+}
+
+// QUICGoVersion is the quic-go module built into this binary, or "unknown".
+func QUICGoVersion() string {
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		for _, d := range bi.Deps {
+			if d.Path == "github.com/quic-go/quic-go" {
+				return d.Version
+			}
+		}
+	}
+	return "unknown"
+}
+
+// Run opens a load session on the node, runs the three phases over TCP and
+// returns the tcp-load result. baseline holds the idle checks run just before,
+// whose round trips the loaded ones are compared with. It returns an error only
+// when cfg is invalid.
+func Run(ctx context.Context, cfg Config, version string, baseline []result.Check) (result.Check, error) {
+	return run(ctx, cfg, version, baseline, false)
+}
+
+// RunQUIC is Run over HTTP/3: the quic-load result. It follows a tcp-load, so it
+// lets that load's queue drain before its first phase.
+func RunQUIC(ctx context.Context, cfg Config, version string, baseline []result.Check) (result.Check, error) {
+	return run(ctx, cfg, version, baseline, true)
+}
+
+func run(ctx context.Context, cfg Config, version string, baseline []result.Check, quic bool) (c result.Check, err error) {
 	if err := cfg.Validate(); err != nil {
 		return result.Check{}, fmt.Errorf("invalid configuration: %w", err)
 	}
@@ -155,18 +199,22 @@ func Run(ctx context.Context, cfg Config, version string, baseline []result.Chec
 		dialUDP = func(ctx context.Context, a string) (net.Conn, error) { return netx.DialUDP(ctx, a) }
 	}
 
+	id, proto, transport, params := "tcp-load", "tcp", "", cfg.params()
+	if quic {
+		id, proto, transport, params = "quic-load", "quic", protocol.TransportQUIC, cfg.quicParams(QUICGoVersion())
+	}
 	start := time.Now()
 	c = result.Check{
-		ID:            "tcp-load",
+		ID:            id,
 		MethodVersion: 1,
-		Path:          result.Path{Node: inv.Addrs[0], Family: nodeclient.Family(inv.Addrs[0]), Protocol: "tcp"},
-		Params:        cfg.params(),
+		Path:          result.Path{Node: inv.Addrs[0], Family: nodeclient.Family(inv.Addrs[0]), Protocol: proto},
+		Params:        params,
 		Metrics:       []result.Metric{},
 		Node:          &result.NodeReport{Label: inv.Label},
 	}
 	defer func() { c.ElapsedMs = time.Since(start).Milliseconds() }()
 
-	sess, err := nodeclient.Open(ctx, inv, dial, cfg.dialTimeout, version, protocol.CheckLoad, cfg.want())
+	sess, err := nodeclient.Open(ctx, inv, dial, cfg.dialTimeout, version, protocol.SessionRequest{Check: protocol.CheckLoad, Transport: transport, Want: cfg.want()})
 	if err != nil {
 		var ne *nodeclient.Error
 		switch {
@@ -186,6 +234,7 @@ func Run(ctx context.Context, cfg Config, version string, baseline []result.Chec
 	c.Node.Granted = &result.Grant{Connections: g.Connections, DialRate: g.DialRate, DurationS: g.DurationS, IdleTimeoutS: g.IdleTimeoutS, StampRate: g.StampRate}
 	if lg != nil && lg.Refused == "" {
 		c.Node.Granted.LoadBytes, c.Node.Granted.LoadConnections = lg.Bytes, lg.Connections
+		c.Node.TCPCongestion = lg.TCPCongestion
 	}
 	c.Node.LoadStart = nodeclient.Load(&sess.Resp.Node)
 	switch {
@@ -199,6 +248,11 @@ func Run(ctx context.Context, cfg Config, version string, baseline []result.Chec
 		c.Status = result.Error
 		c.Error = &result.Message{Key: "load.error.refused_" + lg.Refused, Params: map[string]any{"retry_after_ms": lg.RetryAfterS * 1000}}
 		return c, nil
+	case quic && lg.QUIC == nil: // a node without HTTP/3 granted TCP; nothing used it
+		c.Node.LoadEnd = nodeclient.EndLoad(sess.End())
+		c.Status = result.Unsupported
+		c.Warnings = append(c.Warnings, result.Message{Key: "quic_load.unsupported.node_without_quic"})
+		return c, nil
 	case time.Duration(g.DurationS)*time.Second < cfg.stage()+2*tmax:
 		c.Node.LoadEnd = nodeclient.EndLoad(sess.End())
 		c.Status = result.Invalid
@@ -211,6 +265,15 @@ func Run(ctx context.Context, cfg Config, version string, baseline []result.Chec
 		loadDial = netx.Dialer(connectTimeout, 0).DialContext
 	}
 	t := &target{addr: sess.Addr, token: protocol.EncodeID(inv.Token[:]), session: sess.Resp.SessionID, pin: inv.Pin, dial: loadDial, timeout: connectTimeout}
+	if quic {
+		if t.quic, err = quicPathOf(sess.Addr, lg.QUIC.Port, cfg.listenUDP); err != nil {
+			c.Node.LoadEnd = nodeclient.EndLoad(sess.End())
+			c.Status = result.Error
+			c.Error = &result.Message{Key: "quic_load.error.address", Params: map[string]any{"error": err.Error()}}
+			return c, nil
+		}
+		c.Path.Node = t.quic.hostport
+	}
 	allowance := min(probeAllowance, lg.Bytes/10) // a small grant still leaves the phases most of it
 	phaseBytes := min(cfg.phaseMB*1e6, (lg.Bytes-allowance)/int64(len(phases)))
 	maxConns := max(lg.Connections-probeHeadroom, 2)
@@ -221,7 +284,7 @@ func Run(ctx context.Context, cfg Config, version string, baseline []result.Chec
 	for i, spec := range phases {
 		var waited time.Duration
 		drained := true
-		if i > 0 {
+		if i > 0 || quic {
 			waited, drained = probes.drain(ctx, base)
 		}
 		if ctx.Err() != nil {
@@ -251,8 +314,43 @@ func Run(ctx context.Context, cfg Config, version string, baseline []result.Chec
 			c.Node.Traffic = &result.Traffic{SentBytes: counts.Sent, ReceivedBytes: counts.Received, LagTicks: counts.LagTicks, LagOver: counts.LagOver}
 		}
 	}
-	finish(&c, results, ur, tr, probes.notes, counts, base, cfg)
+	if t.quic != nil {
+		probes.notes = append(probes.notes, bufferFacts(&c, t.quic)...)
+	}
+	finish(&c, results, ur, tr, probes.notes, counts, base, cfg, t.quic)
 	return c, nil
+}
+
+// quicPathOf is the node's HTTP/3 port on the host of addr, the address the
+// session was opened on. listen opens each connection's socket; nil means netx.
+func quicPathOf(addr string, port int, listen func(context.Context) (net.PacketConn, error)) (*quicPath, error) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	hostport := net.JoinHostPort(host, strconv.Itoa(port))
+	ua, err := net.ResolveUDPAddr("udp", hostport)
+	if err != nil {
+		return nil, err
+	}
+	if listen == nil {
+		listen = func(ctx context.Context) (net.PacketConn, error) { return netx.ListenPacket(ctx, ":0") }
+	}
+	return &quicPath{hostport: hostport, addr: ua, listen: listen}, nil
+}
+
+// bufferFacts reports the smallest UDP buffers the QUIC sockets got, and a note
+// when they fell short of what quic-go asks for.
+func bufferFacts(c *result.Check, q *quicPath) []result.Message {
+	recv, send := q.buffers()
+	if recv == 0 && send == 0 {
+		return nil
+	}
+	c.Metrics = append(c.Metrics, result.Bytes("host.udp_receive_buffer", uint64(recv)), result.Bytes("host.udp_send_buffer", uint64(send)))
+	if recv >= quicBuffer && send >= quicBuffer {
+		return nil
+	}
+	return []result.Message{msg("quic_load.not_proven.udp_buffer", map[string]any{"wanted_mib": quicBuffer >> 20}, "host.udp_receive_buffer", "host.udp_send_buffer")}
 }
 
 // probes are the baseline's two streams, run across the whole load stage on one

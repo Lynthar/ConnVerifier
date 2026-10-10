@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -14,6 +15,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
 
 	"github.com/Lynthar/ConnVerifier/internal/netx"
 	"github.com/Lynthar/ConnVerifier/internal/probe/nodeclient"
@@ -39,6 +43,8 @@ const (
 
 var zeros = make([]byte, chunk)
 
+var errNoConnection = errors.New("no load connection opened within the phase")
+
 // Why a phase stopped.
 const (
 	stopSettled     = "settled"     // responsiveness settled after goodput did
@@ -57,12 +63,90 @@ type phaseSpec struct {
 
 var phases = []phaseSpec{{"download", true, false}, {"upload", false, true}, {"bidirectional", true, true}}
 
-// target is a session's load endpoints on one node address.
+// target is a session's load endpoints on one node address: over TCP, or over
+// HTTP/3 when quic is set.
 type target struct {
 	addr, token, session string
 	pin                  [32]byte
 	dial                 nodeclient.DialFunc
 	timeout              time.Duration
+	quic                 *quicPath
+}
+
+// quicPath is where a session's HTTP/3 goes and what its sockets got. Each QUIC
+// connection sends from a UDP socket of its own, like each TCP connection.
+type quicPath struct {
+	hostport   string
+	addr       net.Addr
+	listen     func(ctx context.Context) (net.PacketConn, error)
+	handshakes atomic.Int64 // QUIC handshakes that completed
+	mu         sync.Mutex
+	recv, send int // the smallest UDP buffers a socket got; 0 until one is known
+}
+
+// noteBuffers keeps the smallest buffers any of the session's sockets got.
+func (q *quicPath) noteBuffers(pc net.PacketConn) {
+	recv, send, ok := netx.UDPBuffers(pc)
+	if !ok {
+		return
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.recv == 0 || recv < q.recv {
+		q.recv = recv
+	}
+	if q.send == 0 || send < q.send {
+		q.send = send
+	}
+}
+
+func (q *quicPath) buffers() (recv, send int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.recv, q.send
+}
+
+// closers closes in order: an HTTP/3 transport first, so its connections end
+// with CONNECTION_CLOSE and the node stops counting them, then the sockets.
+type closers []io.Closer
+
+func (cs closers) Close() error {
+	for _, c := range cs {
+		c.Close()
+	}
+	return nil
+}
+
+// h3 is an HTTP/3 transport holding at most one connection, opened from a UDP
+// socket of its own and trusting the pin only. Every socket it opens goes to
+// keep, for its owner to close; handshake, if set, gets each handshake's length.
+func (t *target) h3(keep func(io.Closer), handshake func(time.Duration)) *http3.Transport {
+	q := t.quic
+	return &http3.Transport{
+		TLSClientConfig:        protocol.ClientTLS(t.pin),
+		QUICConfig:             &quic.Config{HandshakeIdleTimeout: t.timeout},
+		MaxResponseHeaderBytes: 8 << 10,
+		DisableCompression:     true,
+		Dial: func(ctx context.Context, _ string, tc *tls.Config, qc *quic.Config) (*quic.Conn, error) {
+			pc, err := q.listen(ctx)
+			if err != nil {
+				return nil, err
+			}
+			tr := &quic.Transport{Conn: pc}
+			keep(closers{tr, pc})
+			start := time.Now()
+			c, err := tr.Dial(ctx, q.addr, tc, qc)
+			q.noteBuffers(pc) // after quic-go has tried to raise them
+			if err != nil {
+				return nil, err
+			}
+			q.handshakes.Add(1)
+			if handshake != nil {
+				handshake(time.Since(start))
+			}
+			return c, nil
+		},
+	}
 }
 
 // transport opens connections like the control client does: the run's dialer,
@@ -87,7 +171,11 @@ func (t *target) transport(load bool, dial nodeclient.DialFunc) *http.Transport 
 }
 
 func (t *target) request(ctx context.Context, method, endpoint string, body io.Reader) *http.Request {
-	req, _ := http.NewRequestWithContext(ctx, method, "https://"+t.addr+protocol.LoadPath(t.session, endpoint), body)
+	host := t.addr
+	if t.quic != nil {
+		host = t.quic.hostport
+	}
+	req, _ := http.NewRequestWithContext(ctx, method, "https://"+host+protocol.LoadPath(t.session, endpoint), body)
 	req.Header.Set("Authorization", "Bearer "+t.token)
 	req.Header.Set("Accept-Encoding", "identity") // §7: the server must not compress
 	if body != nil {
@@ -102,10 +190,12 @@ func (t *target) request(ctx context.Context, method, endpoint string, body io.R
 // Counting elsewhere is wrong both ways — above the socket HTTP/2 holds a
 // download's data before the body yields it, and bytes written on the sending
 // side include whatever is still in flight, which grows with a deep queue.
-// pending, delivered and total are written by its connections, the rest only by
-// the interval loop.
+// HTTP/3 downloads are counted as body bytes read: QUIC packets carry varying
+// overhead, and no HTTP/2 layer holds data back. pending, delivered and total
+// are written by its connections, the rest only by the interval loop.
 type direction struct {
 	down      bool
+	body      bool         // counted above the transport: HTTP/3
 	payload   float64      // share of a counted byte that is payload
 	pending   atomic.Int64 // counted bytes since the last interval boundary
 	delivered atomic.Int64 // counted bytes in all
@@ -115,7 +205,8 @@ type direction struct {
 	ma        []float64    // moving averages over full windows, bit/s
 	settled   bool
 	conns     int          // load connections opened, including those that never carried their stream
-	failed    atomic.Int64 // of those, how many never did
+	failed    atomic.Int64 // of those, how many failed before they did
+	carried   atomic.Int64 // of those, how many did
 	started   time.Time
 	finalBPS  float64
 	wires     []*wireConn // guarded by phaseRun.mu
@@ -144,10 +235,11 @@ type phaseRun struct {
 	uploads       sync.WaitGroup // the upload connections, also in conns
 	probes        sync.WaitGroup
 	foreignFailed atomic.Int64
-	mu            sync.Mutex        // guards the fields below
-	connErr       error             // why the first load connection that failed to open did
-	raw           []net.Conn        // every connection the phase's load dialed, closed when it ends
-	ready         []*http.Transport // load connections carrying their stream: where self probes go
+	mu            sync.Mutex          // guards the fields below
+	connErr       error               // why the first load connection that failed to open did
+	opened        []io.Closer         // every connection or transport the phase's load opened, closed when it ends
+	closed        bool                // the phase has closed opened; what opens later is closed at once
+	ready         []http.RoundTripper // load connections carrying their stream: where self probes go
 	foreign       []foreignProbe
 	self          []selfProbe
 }
@@ -233,7 +325,20 @@ func deliver(d *direction, n int64) {
 	d.delivered.Add(n)
 }
 
-func (p *phaseRun) markReady(tr *http.Transport) {
+// keep holds c for the phase's end, or closes it now if the phase has ended: a
+// dial can finish after the phase gave up on it.
+func (p *phaseRun) keep(c io.Closer) {
+	p.mu.Lock()
+	if !p.closed {
+		p.opened = append(p.opened, c)
+		p.mu.Unlock()
+		return
+	}
+	p.mu.Unlock()
+	c.Close()
+}
+
+func (p *phaseRun) markReady(tr http.RoundTripper) {
 	p.mu.Lock()
 	p.ready = append(p.ready, tr)
 	p.mu.Unlock()
@@ -269,6 +374,10 @@ func (c *wireConn) Write(b []byte) (int, error) {
 // can close it at its end: a transport keeps a connection whose streams are still
 // being torn down, and it would outlive the phase and its share of the grant.
 func (p *phaseRun) open(d *direction) {
+	if p.t.quic != nil {
+		p.openQUIC(d)
+		return
+	}
 	var wc *wireConn
 	lowat := d.unsentLimit(p.id, d.established()+1)
 	tr := p.t.transport(true, func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -281,7 +390,11 @@ func (p *phaseRun) open(d *direction) {
 		}
 		p.mu.Lock()
 		defer p.mu.Unlock()
-		p.raw = append(p.raw, c)
+		if p.closed { // dialed after the phase ended
+			c.Close()
+			return nil, net.ErrClosed
+		}
+		p.opened = append(p.opened, c)
 		wc = &wireConn{Conn: c, p: p, d: d}
 		d.wires = append(d.wires, wc)
 		return wc, nil
@@ -293,6 +406,25 @@ func (p *phaseRun) open(d *direction) {
 		}
 		p.mu.Unlock()
 		p.markReady(tr)
+	}
+	p.start(tr, d, arm)
+}
+
+// openQUIC starts an HTTP/3 load connection in direction d; its transport is
+// kept ahead of its socket, so the phase's end closes the connection first.
+func (p *phaseRun) openQUIC(d *direction) {
+	tr := p.t.h3(p.keep, nil)
+	p.keep(tr)
+	p.start(tr, d, func() { p.markReady(tr) })
+}
+
+// start runs a load connection's stream in direction d over tr; arm runs once
+// the connection carries the stream.
+func (p *phaseRun) start(tr http.RoundTripper, d *direction, arm func()) {
+	armed := arm
+	arm = func() {
+		armed()
+		d.carried.Add(1)
 	}
 	d.conns++
 	if !d.down {
@@ -310,7 +442,7 @@ func (p *phaseRun) open(d *direction) {
 
 // download reads the large object; its end means the node's grant ran out. A
 // connection that fails before the response begins never carried its stream.
-func (p *phaseRun) download(tr *http.Transport, d *direction, arm func()) {
+func (p *phaseRun) download(tr http.RoundTripper, d *direction, arm func()) {
 	resp, err := tr.RoundTrip(p.t.request(p.ctx, http.MethodGet, protocol.LoadLarge, nil))
 	if err != nil {
 		p.connectFailed(d, err)
@@ -324,7 +456,11 @@ func (p *phaseRun) download(tr *http.Transport, d *direction, arm func()) {
 	arm()
 	buf := make([]byte, chunk)
 	for {
-		_, err := resp.Body.Read(buf)
+		n, err := resp.Body.Read(buf)
+		if d.body && n > 0 {
+			p.spend(d, n)
+			deliver(d, int64(n))
+		}
 		switch {
 		case err == io.EOF:
 			p.stop(stopNodeBudget, nil)
@@ -340,6 +476,7 @@ func (p *phaseRun) download(tr *http.Transport, d *direction, arm func()) {
 // first read means the request is on its way, so the connection is armed.
 type uploadBody struct {
 	p     *phaseRun
+	d     *direction
 	arm   func()
 	armed atomic.Bool
 }
@@ -352,14 +489,18 @@ func (b *uploadBody) Read(buf []byte) (int, error) {
 		b.arm()
 		b.armed.Store(true)
 	}
-	return copy(buf, zeros), nil
+	n := copy(buf, zeros)
+	if b.d.body {
+		b.p.spend(b.d, n)
+	}
+	return n, nil
 }
 
 // upload posts until the phase stops and counts as goodput what the node reports
 // it has read. A connection that fails before the node answers never carried its
 // stream; the node's answer ending while the phase runs means its grant ran out.
-func (p *phaseRun) upload(tr *http.Transport, d *direction, arm func()) {
-	body := &uploadBody{p: p, arm: arm}
+func (p *phaseRun) upload(tr http.RoundTripper, d *direction, arm func()) {
+	body := &uploadBody{p: p, d: d, arm: arm}
 	resp, err := tr.RoundTrip(p.t.request(p.ctx, http.MethodPost, protocol.LoadUpload, body))
 	switch {
 	case err != nil && body.armed.Load():
@@ -399,7 +540,7 @@ func (p *phaseRun) upload(tr *http.Transport, d *direction, arm func()) {
 // priority over the load.
 func (p *phaseRun) selfProbe() {
 	p.mu.Lock()
-	var tr *http.Transport
+	var tr http.RoundTripper
 	if len(p.ready) > 0 {
 		tr = p.ready[rand.IntN(len(p.ready))]
 	}
@@ -426,6 +567,10 @@ func (p *phaseRun) selfProbe() {
 // foreignProbe fetches the small object on a new connection and times its TCP
 // handshake, its TLS handshake and the exchange separately (§5.3).
 func (p *phaseRun) foreignProbe() {
+	if p.t.quic != nil {
+		p.foreignProbeQUIC()
+		return
+	}
 	var mu sync.Mutex
 	var dialStart, dialDone, tlsStart, tlsDone, gotConn time.Time
 	var conn net.Conn
@@ -471,6 +616,46 @@ func (p *phaseRun) foreignProbe() {
 		return
 	}
 	f := foreignProbe{done: done, tcp: dialDone.Sub(dialStart), tls: tlsDone.Sub(tlsStart), http: done.Sub(gotConn)}
+	p.mu.Lock()
+	p.foreign = append(p.foreign, f)
+	p.mu.Unlock()
+}
+
+// foreignProbeQUIC fetches the small object on a new QUIC connection and times
+// its handshake — transport and TLS in one — and the exchange separately.
+func (p *phaseRun) foreignProbeQUIC() {
+	var mu sync.Mutex
+	var handshake time.Duration
+	var connected time.Time
+	var opened closers
+	tr := p.t.h3(func(c io.Closer) { mu.Lock(); opened = append(opened, c); mu.Unlock() },
+		func(d time.Duration) { mu.Lock(); handshake, connected = d, time.Now(); mu.Unlock() })
+	defer func() {
+		tr.Close()
+		mu.Lock()
+		opened.Close()
+		mu.Unlock()
+	}()
+	failed := func() {
+		if p.ctx.Err() == nil { // not the phase's teardown
+			p.foreignFailed.Add(1)
+		}
+	}
+	resp, err := tr.RoundTrip(p.t.request(p.ctx, http.MethodGet, protocol.LoadSmall, nil))
+	if err != nil {
+		failed()
+		return
+	}
+	_, err = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	done := time.Now()
+	mu.Lock()
+	defer mu.Unlock()
+	if err != nil || resp.StatusCode != http.StatusOK || connected.IsZero() {
+		failed()
+		return
+	}
+	f := foreignProbe{done: done, quic: handshake, http: done.Sub(connected)}
 	p.mu.Lock()
 	p.foreign = append(p.foreign, f)
 	p.mu.Unlock()
@@ -537,11 +722,16 @@ func runPhase(ctx context.Context, t *target, spec phaseSpec, id, maxTime time.D
 	pctx, cancel := context.WithCancel(ctx)
 	p := &phaseRun{t: t, id: id, limit: bytes, maxConns: maxConns, ctx: pctx, cancel: cancel, stopCh: make(chan struct{})}
 	start := time.Now()
+	quic := t.quic != nil
 	if spec.down {
-		p.dirs = append(p.dirs, &direction{down: true, payload: tlsPayload, started: start})
+		d := &direction{down: true, body: quic, payload: tlsPayload, started: start}
+		if quic {
+			d.payload = 1
+		}
+		p.dirs = append(p.dirs, d)
 	}
 	if spec.up {
-		p.dirs = append(p.dirs, &direction{payload: 1, started: start})
+		p.dirs = append(p.dirs, &direction{body: quic, payload: 1, started: start})
 	}
 	r := phaseResult{spec: spec, ran: true, start: start, dirs: p.dirs}
 	for _, d := range p.dirs {
@@ -589,7 +779,8 @@ loop:
 				r.settledAt = now
 			}
 			if !r.settledAt.IsZero() {
-				if rr := rpmOf(p.window(now.Add(-mad*id), now)); rr.ok {
+				f, s := p.window(now.Add(-mad*id), now)
+				if rr := rpmOf(f, s, quic); rr.ok {
 					r.rpm = rr
 					rpms = append(rpms, rr.rpm)
 				}
@@ -626,21 +817,24 @@ loop:
 	cancel()
 	p.conns.Wait()
 	p.probes.Wait()
-	p.mu.Lock()
-	for _, c := range p.raw {
-		c.Close()
-	}
-	p.mu.Unlock()
+	p.closeOpened()
 
 	r.stopped, r.err = p.stopWhy, p.stopErr
 	r.bytes = p.total.Load()
 	r.conns = p.totalConns()
 	r.foreignFailed = int(p.foreignFailed.Load())
+	var carried int64
 	for _, d := range p.dirs {
 		r.connFailed += int(d.failed.Load())
+		carried += d.carried.Load()
 	}
-	if r.conns == 0 && r.stopped != stopError && r.stopped != stopInterrupted {
-		r.stopped, r.err = stopError, p.connErr // not one load connection opened
+	// Not one load connection carried its stream: those still opening when the
+	// phase ended never did either, as on a path that drops every handshake.
+	if carried == 0 && r.stopped != stopError && r.stopped != stopInterrupted {
+		r.stopped, r.err = stopError, p.connErr
+		if r.err == nil {
+			r.err = errNoConnection
+		}
 	}
 	for _, d := range p.dirs {
 		d.finalBPS = d.rate(id)
@@ -652,7 +846,8 @@ loop:
 		r.gpConf = append(r.gpConf, confidence(len(d.series), d.settled))
 	}
 	if r.settledAt.IsZero() || !r.rpm.ok {
-		r.rpm = rpmOf(p.window(r.end.Add(-mad*id), r.end))
+		f, s := p.window(r.end.Add(-mad*id), r.end)
+		r.rpm = rpmOf(f, s, quic)
 	}
 	r.rpmConf = confidence(len(rpms), r.stopped == stopSettled) // no values before goodput settled: low
 	from := r.settledAt
@@ -661,12 +856,24 @@ loop:
 	}
 	f, s := p.window(from, r.end)
 	for _, x := range f {
-		r.foreign = append(r.foreign, x.tcp+x.tls+x.http)
+		r.foreign = append(r.foreign, x.tcp+x.tls+x.quic+x.http)
 	}
 	for _, x := range s {
 		r.self = append(r.self, x.http)
 	}
 	return r
+}
+
+// closeOpened closes what the phase's load opened, without holding p.mu: closing
+// an HTTP/3 transport waits for its dial, which registers its socket under p.mu.
+// Whatever registers from then on is closed on the spot.
+func (p *phaseRun) closeOpened() {
+	p.mu.Lock()
+	p.closed = true
+	opened := p.opened
+	p.opened = nil
+	p.mu.Unlock()
+	closers(opened).Close()
 }
 
 // awaitUploads lets the uploads of a stopped phase end on their own, their bodies

@@ -62,6 +62,7 @@ var zeros = make([]byte, loadChunk)
 // body byte in either direction before it moves; sent and received count what did.
 type loadState struct {
 	ip             netip.Addr // the address the session was created from
+	quic           bool       // granted over HTTP/3
 	conns          int
 	granted        int64
 	day            time.Time // the UTC day the grant was charged to
@@ -75,9 +76,9 @@ type loadState struct {
 	counts         protocol.LoadCounts
 }
 
-func newLoadState(ip netip.Addr, granted int64, conns int, day, now time.Time) *loadState {
+func newLoadState(ip netip.Addr, quic bool, granted int64, conns int, day, now time.Time) *loadState {
 	l := &loadState{
-		ip: ip, conns: conns, granted: granted, day: day,
+		ip: ip, quic: quic, conns: conns, granted: granted, day: day,
 		small: newBucket(smallRate, smallRate, now),
 		lag:   netenv.StartLag(lagPeriod, lagLimit),
 		ended: make(chan struct{}),

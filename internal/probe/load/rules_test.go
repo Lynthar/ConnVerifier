@@ -29,7 +29,8 @@ func with(f func(*phaseResult)) []phaseResult {
 	return p
 }
 
-// Rows follow the "Status rules" table of docs/methods/tcp-load.md, in order.
+// Rows follow the "Status rules" tables of docs/methods/tcp-load.md and
+// quic-load.md, in order; the two differ only in quic-load's inference on rule 1.
 func TestStatusRules(t *testing.T) {
 	broke := errors.New("connection reset")
 	valid := validity{slipSent: 1000, node: &protocol.LoadCounts{LagTicks: 1000}, cpuMax: 0.875}
@@ -48,6 +49,13 @@ func TestStatusRules(t *testing.T) {
 			}
 			return p
 		}(), valid, result.Error, "load.error.all_aborted"},
+		{"1 no QUIC handshake while UDP got through", func() []phaseResult {
+			p := clean()
+			for i := range p {
+				p[i].stopped, p[i].err = stopError, broke
+			}
+			return p
+		}(), validity{slipSent: 1000, cpuMax: 0.875, quicBlocked: true}, result.Error, "quic_load.inference.blocked"},
 		{"2 this host fell behind", with(func(p *phaseResult) { p.lagOver = 51 }), valid, result.Invalid, "load.warning.host_lag"},
 		{"2 this host's CPU was full", with(func(p *phaseResult) { p.cpuBusy = 0.9 }), valid, result.Invalid, "load.warning.host_cpu"},
 		{"2 the grant held the load", with(func(p *phaseResult) { p.capped, p.gpConf = true, []int{result.Medium} }), valid, result.Invalid, "load.warning.grant_connections"},

@@ -1,8 +1,9 @@
 //go:build accuracy && linux
 
 // Package accuracy checks measured values against conditions injected with
-// netem and tbf between two network namespaces. It needs root, iproute2, ethtool
-// and ping, runs for about two hours, and is not part of the commit gate.
+// netem and tbf between two network namespaces. It needs root, iproute2, ethtool,
+// nftables, setpriv and ping, runs for about four hours, and is not part of the
+// commit gate.
 package accuracy
 
 import (
@@ -44,6 +45,7 @@ func TestMain(m *testing.M) {
 	if out, err := exec.Command("go", "build", "-o", bin, "../../cmd/connverifier").CombinedOutput(); err != nil {
 		panic(fmt.Sprintf("build: %v\n%s", err, out))
 	}
+	os.Chmod(dir, 0o755) // Q-B2 runs the client as nobody
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
@@ -57,9 +59,13 @@ func sh(t *testing.T, args ...string) {
 }
 
 // lab is two namespaces joined by a veth pair, with a node serving in one.
+// clientAs, when set, wraps the client inside its namespace (such as setpriv),
+// and stderr holds what the last check wrote there.
 type lab struct {
-	t      *testing.T
-	invite string
+	t        *testing.T
+	invite   string
+	clientAs []string
+	stderr   string
 }
 
 // newLab starts a node whose invite is created with inviteArgs.
@@ -83,7 +89,9 @@ func newLab(t *testing.T, inviteArgs ...string) *lab {
 		sh(t, "ip", "netns", "exec", x.ns, "ethtool", "-K", x.ifc, "tso", "off", "gso", "off")
 	}
 	state := filepath.Join(t.TempDir(), "node")
-	cmd := exec.Command(bin, append([]string{"invite", "create", "-state-dir", state, "-label", "acc", "-addr", nodeIP + ":7443"}, inviteArgs...)...)
+	// Ten runs of both loads at 1 Gbit/s move about 30 GB, past the default daily quota.
+	args := append([]string{"invite", "create", "-state-dir", state, "-label", "acc", "-addr", nodeIP + ":7443", "-max-load-mb-per-day", "200000"}, inviteArgs...)
+	cmd := exec.Command(bin, args...)
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("invite create: %v", err)
@@ -144,22 +152,30 @@ func (l *lab) shape(forward bool, delay, rate, queue string, fq bool) {
 var baselineOnly = []string{"-load-time", "1s", "-load-mb", "1"}
 
 // check runs connverifier check from the client namespace with args and returns
-// the UDP, TCP and load results; prefix wraps the command (such as a CPU-limited
-// scope).
-func (l *lab) check(args []string, prefix ...string) (udp, tcp, load result.Check) {
+// the UDP and TCP results and the two loads, tcp-load then quic-load; prefix
+// wraps the command (such as a CPU-limited scope).
+func (l *lab) check(args []string, prefix ...string) (udp, tcp result.Check, loads []result.Check) {
 	l.t.Helper()
-	args = append(append(prefix, "ip", "netns", "exec", clientNS, bin, "check", "-format", "json"), args...)
+	args = append(append(append(append(prefix, "ip", "netns", "exec", clientNS), l.clientAs...), bin, "check", "-format", "json"), args...)
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Env = append(os.Environ(), "CONNVERIFIER_NODE="+l.invite)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	cmd.Run()
+	l.stderr = stderr.String()
 	var run result.Run
-	if err := json.Unmarshal(stdout.Bytes(), &run); err != nil || len(run.Checks) != 3 {
+	if err := json.Unmarshal(stdout.Bytes(), &run); err != nil || len(run.Checks) != 4 {
 		l.t.Fatalf("check output: %v\n%s\n%s", err, stdout.String(), stderr.String())
 	}
-	return run.Checks[0], run.Checks[1], run.Checks[2]
+	return run.Checks[0], run.Checks[1], run.Checks[2:]
 }
+
+// loadKinds are the two loads of a check, in its order, with their goodput
+// ceilings.
+var loadKinds = []struct {
+	id      string
+	ceiling func(rate float64) float64
+}{{"tcp-load", ceiling}, {"quic-load", quicCeiling}}
 
 func value(c result.Check, id string) (v float64, m result.Metric) {
 	for _, m := range c.Metrics {
@@ -328,6 +344,11 @@ func TestS7Clean(t *testing.T) {
 // a full TLS record carries 16384 bytes of payload in 16406.
 func ceiling(rate float64) float64 { return rate / 1e6 * 1448 / 1514 * 16384 / 16406 }
 
+// quicCeiling is the same for QUIC: a 1452-byte UDP payload, quic-go's largest,
+// in a 1494-byte frame, less about 7 bytes of short header, a 16-byte AEAD tag
+// and 9 of STREAM frame header — an estimate, pinned by the first runs.
+func quicCeiling(rate float64) float64 { return rate / 1e6 * 1420 / 1494 }
+
 func warnings(c result.Check) string {
 	var k []string
 	for _, w := range c.Warnings {
@@ -342,6 +363,9 @@ func summary(c result.Check) string {
 	for _, m := range append(append([]result.Message{}, c.Warnings...), c.Inferences...) {
 		k = append(k, fmt.Sprintf("%s%v", m.Key, m.Params))
 	}
+	if c.Error != nil {
+		k = append(k, fmt.Sprintf("error %s%v", c.Error.Key, c.Error.Params))
+	}
 	ticks, _ := value(c, "lag.ticks")
 	late, _ := value(c, "lag.over_10ms")
 	cpu, _ := value(c, "cpu.busy_max")
@@ -355,48 +379,58 @@ func hostBound(c result.Check) bool {
 }
 
 // goodputRuns shapes both directions to down and up bit/s over a 20 ms round
-// trip and requires, in each of runs runs, settled download and upload goodput
-// within [0.93, 1.005] of their ceilings, and no host or node limit reported. The
-// floor leaves the probes their share: up to 5% of goodput, and the independent
-// probes about 0.1 Mbit/s, 1% of a 10 Mbit/s link.
+// trip and requires, in each of runs runs and for each load, settled download
+// and upload goodput within [0.93, 1.005] of its ceiling, and no host or node
+// limit reported. The floor leaves the probes their share: up to 5% of goodput,
+// and the independent probes about 0.1 Mbit/s, 1% of a 10 Mbit/s link. It logs
+// QUIC's goodput over TCP's in each run, which Q-C1 records without a bound.
 func goodputRuns(t *testing.T, down, up float64, runs int) {
 	l := newLab(t)
 	l.shape(false, "10ms", fmt.Sprint(down), "40ms", false)
 	l.shape(true, "10ms", fmt.Sprint(up), "40ms", false)
 	for run := range runs {
-		_, _, ld := l.check([]string{"-duration", "10s"})
-		for _, x := range []struct {
-			phase string
-			ceil  float64
-		}{{"download", ceiling(down)}, {"upload", ceiling(up)}} {
-			v, m := value(ld, x.phase+".goodput")
-			conf, _ := value(ld, x.phase+".goodput.confidence")
-			t.Logf("run %d %s: %.2f Mbit/s (ceiling %.2f, %.1f%%) confidence %v at least %v", run, x.phase, v, x.ceil, v/x.ceil*100, conf, m.AtLeast)
-			if v < 0.93*x.ceil || v > 1.005*x.ceil || conf != result.High || m.AtLeast {
-				t.Errorf("run %d %s outside the contract", run, x.phase)
+		_, _, loads := l.check([]string{"-duration", "10s"})
+		for k, ld := range loads {
+			kind := loadKinds[k]
+			for _, x := range []struct {
+				phase string
+				ceil  float64
+			}{{"download", kind.ceiling(down)}, {"upload", kind.ceiling(up)}} {
+				v, m := value(ld, x.phase+".goodput")
+				conf, _ := value(ld, x.phase+".goodput.confidence")
+				t.Logf("run %d %s %s: %.2f Mbit/s (ceiling %.2f, %.1f%%) confidence %v at least %v", run, kind.id, x.phase, v, x.ceil, v/x.ceil*100, conf, m.AtLeast)
+				if v < 0.93*x.ceil || v > 1.005*x.ceil || conf != result.High || m.AtLeast {
+					t.Errorf("run %d %s %s outside the contract", run, kind.id, x.phase)
+				}
+			}
+			bd, _ := value(ld, "bidirectional.goodput.download")
+			bu, _ := value(ld, "bidirectional.goodput.upload")
+			t.Logf("run %d %s both: %.2f / %.2f Mbit/s; %s", run, kind.id, bd, bu, summary(ld))
+			if bd > 1.005*kind.ceiling(down) || bu > 1.005*kind.ceiling(up) {
+				t.Errorf("run %d %s: both directions above their ceilings", run, kind.id)
+			}
+			if hostBound(ld) {
+				t.Errorf("run %d %s: host or node reported as the limit at %v bit/s: %s", run, kind.id, down, warnings(ld))
 			}
 		}
-		bd, _ := value(ld, "bidirectional.goodput.download")
-		bu, _ := value(ld, "bidirectional.goodput.upload")
-		t.Logf("run %d both: %.2f / %.2f Mbit/s; %s", run, bd, bu, summary(ld))
-		if bd > 1.005*ceiling(down) || bu > 1.005*ceiling(up) {
-			t.Errorf("run %d: both directions above their ceilings", run)
-		}
-		if hostBound(ld) {
-			t.Errorf("run %d: host or node reported as the limit at %v bit/s: %s", run, down, warnings(ld))
+		for _, phase := range []string{"download", "upload"} {
+			tg, _ := value(loads[0], phase+".goodput")
+			qg, _ := value(loads[1], phase+".goodput")
+			t.Logf("run %d %s: QUIC/TCP goodput %.3f", run, phase, qg/tg)
 		}
 	}
 }
 
-// L1, L2 and L3. L2 is also L7: unthrottled CPU at 100 Mbit/s must never be
-// reported as this host's limit.
+// L1, L2 and L3, for both loads. L2 is also L7: unthrottled CPU at 100 Mbit/s
+// must never be reported as this host's limit; and Q-C1, the QUIC/TCP ratio.
 func TestL1Goodput20(t *testing.T)        { goodputRuns(t, 20e6, 20e6, 10) }
 func TestL2Goodput100(t *testing.T)       { goodputRuns(t, 100e6, 100e6, 10) }
 func TestL3Asymmetric100_10(t *testing.T) { goodputRuns(t, 100e6, 10e6, 5) }
 
 // queueRuns shapes both directions to 20 Mbit/s over a 20 ms round trip with a
-// 200 ms tbf queue, with fq_codel inside it when fq, and returns the load checks.
-func queueRuns(t *testing.T, fq bool, runs int) (idleUDP []float64, loads []result.Check) {
+// 200 ms tbf queue, with fq_codel inside it when fq, and returns each run's two
+// load checks.
+func queueRuns(t *testing.T, fq bool, runs int) (idleUDP []float64, loads [][]result.Check) {
 	l := newLab(t)
 	l.shape(false, "10ms", "20mbit", "200ms", fq)
 	l.shape(true, "10ms", "20mbit", "200ms", fq)
@@ -412,14 +446,16 @@ func queueRuns(t *testing.T, fq bool, runs int) (idleUDP []float64, loads []resu
 // L4: a 200 ms FIFO fills; the independent probes see it and RPM is poor.
 func TestL4BloatedQueue(t *testing.T) {
 	_, loads := queueRuns(t, false, 3)
-	for run, ld := range loads {
-		for _, phase := range []string{"download", "upload"} {
-			udp, _ := value(ld, phase+".udp.rtt.p50")
-			tcp, _ := value(ld, phase+".tcp.rtt.p50")
-			rpm, _ := value(ld, phase+".rpm")
-			t.Logf("run %d %s: udp p50 %.1f tcp p50 %.1f ms, %.0f RPM; %s", run, phase, udp, tcp, rpm, summary(ld))
-			if udp < 170 || udp > 240 || tcp < 170 || tcp > 240 || rpm <= 0 || rpm >= 300 {
-				t.Errorf("run %d %s outside the contract", run, phase)
+	for run, lds := range loads {
+		for k, ld := range lds {
+			for _, phase := range []string{"download", "upload"} {
+				udp, _ := value(ld, phase+".udp.rtt.p50")
+				tcp, _ := value(ld, phase+".tcp.rtt.p50")
+				rpm, _ := value(ld, phase+".rpm")
+				t.Logf("run %d %s %s: udp p50 %.1f tcp p50 %.1f ms, %.0f RPM; %s", run, loadKinds[k].id, phase, udp, tcp, rpm, summary(ld))
+				if udp < 170 || udp > 240 || tcp < 170 || tcp > 240 || rpm <= 0 || rpm >= 300 {
+					t.Errorf("run %d %s %s outside the contract", run, loadKinds[k].id, phase)
+				}
 			}
 		}
 	}
@@ -429,14 +465,16 @@ func TestL4BloatedQueue(t *testing.T) {
 // near idle while requests on the load connections wait behind their own data.
 func TestL5FlowQueuing(t *testing.T) {
 	idle, loads := queueRuns(t, true, 3)
-	for run, ld := range loads {
-		for _, phase := range []string{"download", "upload"} {
-			udp, _ := value(ld, phase+".udp.rtt.p50")
-			self, _ := value(ld, phase+".self.p50")
-			foreign, _ := value(ld, phase+".foreign.p50")
-			t.Logf("run %d %s: udp p50 %.1f (idle %.1f) self %.1f foreign %.1f ms", run, phase, udp, idle[run], self, foreign)
-			if udp > idle[run]+15 || self <= foreign {
-				t.Errorf("run %d %s outside the contract", run, phase)
+	for run, lds := range loads {
+		for k, ld := range lds {
+			for _, phase := range []string{"download", "upload"} {
+				udp, _ := value(ld, phase+".udp.rtt.p50")
+				self, _ := value(ld, phase+".self.p50")
+				foreign, _ := value(ld, phase+".foreign.p50")
+				t.Logf("run %d %s %s: udp p50 %.1f (idle %.1f) self %.1f foreign %.1f ms", run, loadKinds[k].id, phase, udp, idle[run], self, foreign)
+				if udp > idle[run]+15 || self <= foreign {
+					t.Errorf("run %d %s %s outside the contract", run, loadKinds[k].id, phase)
+				}
 			}
 		}
 	}
@@ -449,10 +487,12 @@ func TestL6ThrottledClient(t *testing.T) {
 	l.shape(false, "1ms", "1gbit", "20ms", false)
 	l.shape(true, "1ms", "1gbit", "20ms", false)
 	for run := range 10 {
-		_, _, ld := l.check([]string{"-duration", "10s"}, "systemd-run", "--quiet", "--scope", "-p", "CPUQuota=10%")
-		t.Logf("run %d: %s", run, summary(ld))
-		if ld.Status != result.Invalid || !strings.Contains(warnings(ld), "load.warning.host_") {
-			t.Errorf("run %d: %s, want INVALID for this host", run, ld.Status)
+		_, _, loads := l.check([]string{"-duration", "10s"}, "systemd-run", "--quiet", "--scope", "-p", "CPUQuota=10%")
+		for k, ld := range loads {
+			t.Logf("run %d %s: %s", run, loadKinds[k].id, summary(ld))
+			if ld.Status != result.Invalid || !strings.Contains(warnings(ld), "load.warning.host_") {
+				t.Errorf("run %d %s: %s, want INVALID for this host", run, loadKinds[k].id, ld.Status)
+			}
 		}
 	}
 }
@@ -463,17 +503,19 @@ func TestL8NodeBudget(t *testing.T) {
 	l := newLab(t, "-max-load-mb", "50")
 	l.shape(false, "10ms", "100mbit", "40ms", false)
 	l.shape(true, "10ms", "100mbit", "40ms", false)
-	_, _, ld := l.check([]string{"-duration", "10s"})
-	for _, id := range []string{"download.goodput", "upload.goodput", "bidirectional.goodput.download"} {
-		v, m := value(ld, id)
-		t.Logf("%s %.2f Mbit/s at least %v", id, v, m.AtLeast)
-		if !m.AtLeast {
-			t.Errorf("%s is not reported as a lower bound", id)
+	_, _, loads := l.check([]string{"-duration", "10s"})
+	for k, ld := range loads {
+		for _, id := range []string{"download.goodput", "upload.goodput", "bidirectional.goodput.download"} {
+			v, m := value(ld, id)
+			t.Logf("%s %s %.2f Mbit/s at least %v", loadKinds[k].id, id, v, m.AtLeast)
+			if !m.AtLeast {
+				t.Errorf("%s %s is not reported as a lower bound", loadKinds[k].id, id)
+			}
 		}
-	}
-	tr := ld.Node.Traffic
-	if tr == nil || tr.SentBytes+tr.ReceivedBytes > 50e6 {
-		t.Fatalf("node traffic %+v, want at most 50 MB", tr)
+		tr := ld.Node.Traffic
+		if tr == nil || tr.SentBytes+tr.ReceivedBytes > 50e6 {
+			t.Errorf("%s node traffic %+v, want at most 50 MB", loadKinds[k].id, tr)
+		}
 	}
 }
 
@@ -486,17 +528,67 @@ func TestL9BloatedUplink(t *testing.T) {
 	l.shape(false, "10ms", "100mbit", "40ms", false)
 	l.shape(true, "10ms loss 1%", "10mbit", "2s", false)
 	for run := range 3 {
-		_, _, ld := l.check([]string{"-duration", "10s"})
-		up, m := value(ld, "upload.goodput")
-		wait, _ := value(ld, "bidirectional.wait")
-		failed, _ := value(ld, "upload.connect_failures")
-		t.Logf("run %d: upload %.2f Mbit/s (ceiling %.2f) at least %v, %v connections did not open, waited %.0f ms; %s", run, up, ceiling(10e6), m.AtLeast, failed, wait, summary(ld))
-		var inferred []string
-		for _, i := range ld.Inferences {
-			inferred = append(inferred, i.Key)
+		_, _, loads := l.check([]string{"-duration", "10s"})
+		for k, ld := range loads {
+			ceil := loadKinds[k].ceiling(10e6)
+			up, m := value(ld, "upload.goodput")
+			wait, _ := value(ld, "bidirectional.wait")
+			failed, _ := value(ld, "upload.connect_failures")
+			t.Logf("run %d %s: upload %.2f Mbit/s (ceiling %.2f) at least %v, %v connections did not open, waited %.0f ms; %s", run, loadKinds[k].id, up, ceil, m.AtLeast, failed, wait, summary(ld))
+			var inferred []string
+			for _, i := range ld.Inferences {
+				inferred = append(inferred, i.Key)
+			}
+			if ld.Status == result.Error || slices.Contains(inferred, "load.inference.aborted") || up <= 0 || up > 1.005*ceil {
+				t.Errorf("run %d %s outside the contract", run, loadKinds[k].id)
+			}
 		}
-		if ld.Status == result.Error || slices.Contains(inferred, "load.inference.aborted") || up <= 0 || up > 1.005*ceiling(10e6) {
-			t.Errorf("run %d outside the contract", run)
-		}
+	}
+}
+
+// Q-B1: the node's QUIC port dropped, STAMP and TCP untouched, behind a
+// 100 Mbit/s link so that the network, not this host, bounds tcp-load. quic-load
+// fails and names QUIC as what was blocked; tcp-load still measures.
+func TestQB1QUICBlocked(t *testing.T) {
+	l := newLab(t)
+	l.shape(false, "10ms", "100mbit", "40ms", false)
+	l.shape(true, "10ms", "100mbit", "40ms", false)
+	sh(t, "ip", "netns", "exec", nodeNS, "nft", "add table inet cvacc; add chain inet cvacc in { type filter hook input priority 0; }; add rule inet cvacc in udp dport 7444 drop")
+	_, _, loads := l.check([]string{"-duration", "5s", "-load-time", "5s"})
+	tcpLoad, quicLoad := loads[0], loads[1]
+	t.Logf("tcp-load: %s; quic-load: %s %v", summary(tcpLoad), summary(quicLoad), quicLoad.Error)
+	var inferred []string
+	for _, i := range quicLoad.Inferences {
+		inferred = append(inferred, i.Key)
+	}
+	if quicLoad.Status != result.Error || !slices.Contains(inferred, "quic_load.inference.blocked") {
+		t.Errorf("quic-load %s %v, want ERROR naming QUIC as blocked", quicLoad.Status, inferred)
+	}
+	if tcpLoad.Status == result.Error || tcpLoad.Status == result.Invalid {
+		t.Errorf("tcp-load %s with only QUIC blocked", tcpLoad.Status)
+	}
+}
+
+// Q-B2: an unprivileged client gets Linux's default UDP buffers. The result
+// reports them with a note, its status unchanged by them, and quic-go's own
+// warning never reaches stderr.
+func TestQB2UnprivilegedBuffers(t *testing.T) {
+	l := newLab(t)
+	l.shape(false, "50ms", "100mbit", "100ms", false)
+	l.shape(true, "50ms", "100mbit", "100ms", false)
+	l.clientAs = []string{"setpriv", "--reuid=nobody", "--regid=nogroup", "--clear-groups"}
+	_, _, loads := l.check([]string{"-duration", "5s"})
+	q := loads[1]
+	recv, _ := value(q, "host.udp_receive_buffer")
+	var noted []string
+	for _, m := range q.NotProven {
+		noted = append(noted, m.Key)
+	}
+	t.Logf("quic-load: receive buffer %.0f B; %s; not proven %v", recv, summary(q), noted)
+	if recv <= 0 || recv >= 7<<20 || !slices.Contains(noted, "quic_load.not_proven.udp_buffer") {
+		t.Errorf("buffer %.0f B, notes %v: want the default buffer reported with a note", recv, noted)
+	}
+	if strings.Contains(l.stderr, "buffer size") {
+		t.Errorf("quic-go's warning reached stderr:\n%s", l.stderr)
 	}
 }

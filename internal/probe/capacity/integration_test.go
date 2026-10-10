@@ -54,7 +54,7 @@ func TestLoopbackRunReleasesEverything(t *testing.T) {
 	ncfg.RegisterFlags(fs)
 	fs.Parse([]string{"-state-dir", dir})
 	stopped := make(chan struct{})
-	go func() { node.ServeOn(ctx, ln, nil, ncfg, "vtest"); close(stopped) }()
+	go func() { node.ServeOn(ctx, ln, nil, nil, ncfg, "vtest"); close(stopped) }()
 
 	cfg := validClientConfig()
 	cfg.node = inv.Encode()

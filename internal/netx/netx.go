@@ -8,8 +8,13 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"time"
 )
+
+// quic-go writes to stderr when it cannot raise a UDP buffer to 7 MiB; the load
+// result reports the buffers instead (UDPBuffers), and stdout/stderr stay clean.
+func init() { os.Setenv("QUIC_GO_DISABLE_RECEIVE_BUFFER_WARNING", "true") }
 
 // Dialer returns a TCP dialer with the given dial timeout. keepAlive is the probe
 // period on dialed connections; keepAlive <= 0 disables keepalive.
@@ -24,7 +29,8 @@ func Listen(ctx context.Context, address string, keepAlive time.Duration) (net.L
 	return lc.Listen(ctx, "tcp", address)
 }
 
-// ListenPacket opens a UDP socket on address for the node to answer on.
+// ListenPacket opens a UDP socket on address: the node answers STAMP and QUIC on
+// one each, and each QUIC connection of a client sends from its own (":0").
 func ListenPacket(ctx context.Context, address string) (net.PacketConn, error) {
 	var lc net.ListenConfig
 	return lc.ListenPacket(ctx, "udp", address)
@@ -48,6 +54,11 @@ func keepAlivePeriod(d time.Duration) time.Duration {
 	}
 	return d
 }
+
+// UDPBuffers reports the receive and send buffer sizes pc got, as the kernel
+// reports them (Linux doubles what was asked for); ok is false where they cannot
+// be read.
+func UDPBuffers(pc net.PacketConn) (recv, send int, ok bool) { return udpBuffers(pc) }
 
 // SetNotSentLowat caps the data the kernel holds unsent for c at n bytes, so a
 // sender's own buffer does not add to the round trips it measures

@@ -20,12 +20,13 @@ the result says the node, not your network, set the limit.
 `connverifier check` measures the same path's round-trip time and its variation
 over UDP and TCP side by side, and UDP loss — split into the way to the node and
 the way back, without synchronized clocks. Then it loads the path with TCP —
-download, upload, both — and reports the goodput and how far the same round trips
-rise while the path is full, with responsiveness in the terms of the IETF draft
-`draft-ietf-ippm-responsiveness`.
+download, upload, both — and again with QUIC (HTTP/3), and reports each load's
+goodput and how far the same round trips rise while the path is full, with
+responsiveness in the terms of the IETF draft `draft-ietf-ippm-responsiveness`.
 
-One binary; its only dependencies are the Go project's `golang.org/x/term` and
-`golang.org/x/sys`.
+One binary. Its dependencies are the Go project's `golang.org/x/term`,
+`golang.org/x/sys`, `golang.org/x/crypto` and `golang.org/x/net`, and
+[quic-go](https://github.com/quic-go/quic-go) for QUIC.
 
 ## Build
 
@@ -47,7 +48,8 @@ go build -o bin/connverifier ./cmd/connverifier
 
 On the server, start a node and create an invite for each person who will test
 against it. The node listens on one TCP port (7443 by default) for everything,
-and answers UDP probes on the same port number — open both in the firewall:
+answers UDP probes on the same port number, and serves QUIC on the next UDP port
+(7444) — open all three in the firewall:
 
 ```bash
 ulimit -n 20480
@@ -73,11 +75,12 @@ ulimit -n 20480
 
 `check` first sends 50 small packets a second over UDP and over TCP for 20 seconds
 (`-rate`, `-duration`), then loads the path in three phases of at most 20 seconds
-and 500 MB each (`-load-time`, `-load-mb`); it says how much traffic that may be
-before it starts. Above 500 MB per phase it asks for confirmation, as `capacity`
-does. An invite made before UDP probes existed has no UDP port; the UDP half then
-reports `UNSUPPORTED`, and an older node or invite without load reports the load
-check `UNSUPPORTED`.
+and 500 MB each (`-load-time`, `-load-mb`) over TCP, and the same three over QUIC;
+it says how much traffic that may be before it starts. Above 500 MB per phase it
+asks for confirmation, as `capacity` does. An invite made before UDP probes existed
+has no UDP port; the UDP half then reports `UNSUPPORTED`. An older node or invite
+without load reports both load checks `UNSUPPORTED`, and a node without QUIC the
+QUIC one.
 
 ```bash
 ./bin/connverifier check -node @alice.invite
@@ -132,7 +135,8 @@ Everything is a flag. `check`: `-node`, `-rate` (50), `-duration` (20s),
 `-heartbeat` (30s), `-dial-timeout` (5s), `-io-timeout` (5s), `-min-backoff`
 (500ms), `-max-backoff` (1m), `-duration` (0 = until interrupted), `-log-drops`,
 `-format` (text), `-lang`, `-yes`. `serve`: `-listen` (:7443), `-listen-udp` (the
-`-listen` address), `-state-dir`, `-max-conns` (20000), `-max-sessions` (64),
+`-listen` address), `-listen-quic` (the `-listen` port + 1; `off`), `-quic-port`
+(behind a port mapping), `-state-dir`, `-max-conns` (20000), `-max-sessions` (64),
 `-max-load-sessions` (1), `-log-connections`. `invite create`: `-label`, `-addr` (repeatable),
 `-udp-port` (the first `-addr`'s port), `-max-sessions` (2), `-max-connections`
 (20000), `-max-dial-rate` (1000), `-max-stamp-rate` (100), `-max-duration` (24h),
@@ -144,9 +148,11 @@ mapping and quietly turn every result into "the NAT is fine".
 
 ## Limitations
 
-- **TCP load only.** No UDP bandwidth yet, no STUN, no DNS, one UDP packet size;
-  delay is round trip only, never one way. Goodput is to one node: whether the
-  limit is your connection or the node's own uplink is not determined.
+- **UDP bandwidth is QUIC's.** It is measured with QUIC's own congestion control,
+  not by flooding, and a gap to TCP is not proof that the network limits UDP. No
+  STUN, no DNS, one UDP packet size; delay is round trip only, never one way.
+  Goodput is to one node: whether the limit is your connection or the node's own
+  uplink is not determined.
 - **The JSON schema is `v0`.** It can still change between builds; pin a build
   if you parse it, and don't parse the text.
 - **The exit code doesn't judge your network.** `0` means the run completed,

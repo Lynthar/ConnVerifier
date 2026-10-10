@@ -23,6 +23,10 @@ func TestDecodeSessionRequest(t *testing.T) {
 	if r.Want.Connections != 100 || r.Check != "tcp-capacity" {
 		t.Fatalf("decoded %+v", r)
 	}
+	quic := strings.Replace(validRequest(), `"check":"tcp-capacity"`, `"check":"load","transport":"quic"`, 1)
+	if err := DecodeJSON(strings.NewReader(quic), &r); err != nil || r.Transport != TransportQUIC {
+		t.Fatalf("a QUIC load request: %+v, %v", r, err)
+	}
 }
 
 func TestDecodeJSONRejects(t *testing.T) {
@@ -36,6 +40,8 @@ func TestDecodeJSONRejects(t *testing.T) {
 		"long version":         strings.Replace(validRequest(), `"version":"v0"`, `"version":"`+strings.Repeat("v", 65)+`"`, 1),
 		"load without conns":   strings.Replace(validRequest(), `"idle_timeout_s":60`, `"idle_timeout_s":60,"load_bytes":1000`, 1),
 		"negative load bytes":  strings.Replace(validRequest(), `"idle_timeout_s":60`, `"idle_timeout_s":60,"load_bytes":-1,"load_connections":1`, 1),
+		"unknown transport":    strings.Replace(validRequest(), `"check":"tcp-capacity"`, `"check":"load","transport":"sctp"`, 1),
+		"quic but not load":    strings.Replace(validRequest(), `"check":"tcp-capacity"`, `"check":"tcp-capacity","transport":"quic"`, 1),
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -70,6 +76,12 @@ func TestSessionResponseValidate(t *testing.T) {
 		"load without conns":    func(r *SessionResponse) { r.Load = &LoadGrant{Bytes: 1} },
 		"refused with a grant":  func(r *SessionResponse) { r.Load = &LoadGrant{Bytes: 1, Connections: 1, Refused: ErrReasonBusy} },
 		"unknown refusal":       func(r *SessionResponse) { r.Load = &LoadGrant{Refused: "later"} },
+		"quic port zero":        func(r *SessionResponse) { r.Load = &LoadGrant{Bytes: 1, Connections: 1, QUIC: &QUICGrant{}} },
+		"quic port too high":    func(r *SessionResponse) { r.Load = &LoadGrant{Bytes: 1, Connections: 1, QUIC: &QUICGrant{Port: 65536}} },
+		"refused with quic":     func(r *SessionResponse) { r.Load = &LoadGrant{Refused: ErrReasonBusy, QUIC: &QUICGrant{Port: 7444}} },
+		"long congestion name": func(r *SessionResponse) {
+			r.Load = &LoadGrant{Bytes: 1, Connections: 1, TCPCongestion: strings.Repeat("c", 65)}
+		},
 	}
 	for name, mutate := range mutations {
 		t.Run(name, func(t *testing.T) {

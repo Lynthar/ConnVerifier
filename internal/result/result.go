@@ -91,6 +91,9 @@ type NodeReport struct {
 	LoadStart    *NodeLoad `json:"load_start,omitempty"`
 	LoadEnd      *NodeLoad `json:"load_end,omitempty"`
 	Traffic      *Traffic  `json:"traffic,omitempty"`
+	// TCPCongestion is the node's TCP congestion control, when it told: what any
+	// comparison of its TCP and QUIC goodput must be read against.
+	TCPCongestion string `json:"tcp_congestion,omitempty"`
 }
 
 // Traffic is what the node counted on its load endpoints: body bytes it sent and

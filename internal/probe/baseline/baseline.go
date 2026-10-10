@@ -124,7 +124,7 @@ func Run(ctx context.Context, cfg Config, version string) ([]result.Check, error
 		return []result.Check{udp, tcp}
 	}
 
-	sess, err := nodeclient.Open(ctx, inv, dial, cfg.dialTimeout, version, protocol.CheckBaseline, cfg.want())
+	sess, err := nodeclient.Open(ctx, inv, dial, cfg.dialTimeout, version, protocol.SessionRequest{Check: protocol.CheckBaseline, Want: cfg.want()})
 	if err != nil {
 		var ne *nodeclient.Error
 		if !errors.As(err, &ne) {
