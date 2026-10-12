@@ -26,6 +26,55 @@ func TestStable(t *testing.T) {
 	}
 }
 
+// spanOf replays the interval loop over per-second goodputs in Mbit/s and returns
+// the phase value in Mbit/s and whether it was still steady at the end.
+func spanOf(t *testing.T, mbps ...float64) (float64, bool) {
+	t.Helper()
+	var series []int64
+	var ma []float64
+	first := -1
+	for _, x := range mbps {
+		series = append(series, int64(x*1e6/8))
+		if k := len(series); k >= mad {
+			var sum int64
+			for _, b := range series[k-mad:] {
+				sum += b
+			}
+			ma = append(ma, float64(sum)*8/mad)
+		}
+		if first < 0 && stable(ma) {
+			first = settledFrom(len(series))
+		}
+	}
+	if first < 0 {
+		t.Fatal("never settled")
+	}
+	bps, steady := spanGoodput(series, ma, first, 1, time.Second)
+	return bps / 1e6, steady
+}
+
+// The phase value is the mean since goodput settled. Two 10 Mbit/s uplinks with
+// a 2 s queue: with 1% loss the last window alone read 9.34 of the link's 9.55;
+// without loss the queue overflows and the node reads nothing, then a burst.
+func TestSpanGoodput(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		mbps     []float64
+		lo, hi   float64
+		steadyAt bool
+	}{
+		{"flat", []float64{10, 10, 10, 10, 10, 10, 10, 10, 10}, 10, 10, true},
+		{"1% loss", []float64{8.39, 8.40, 10.35, 8.78, 8.78, 9.30, 8.92, 9.04, 9.18, 9.04, 8.39, 10.09, 8.65, 8.25, 9.18, 9.83, 9.18, 9.44, 8.13, 10.62}, 9.09, 9.11, true},
+		{"overflowing queue", []float64{8.39, 9.45, 9.04, 9.43, 8.66, 9.31, 8.77, 9.44, 9.56, 9.70, 9.17, 8.65, 9.57, 9.43, 3.41, 0.39, 10.75, 9.69, 6.95, 2.23}, 8.09, 8.11, false},
+		{"still rising after it settled", []float64{10, 10, 10, 10, 10, 10, 10, 10.3, 10.6, 10.9, 11.2, 11.5, 11.8, 12.1}, 10.5, 10.7, false},
+	} {
+		got, steady := spanOf(t, tt.mbps...)
+		if got < tt.lo || got > tt.hi || steady != tt.steadyAt {
+			t.Errorf("%s: %.3f Mbit/s steady %v; want [%v, %v] steady %v", tt.name, got, steady, tt.lo, tt.hi, tt.steadyAt)
+		}
+	}
+}
+
 func ms(v ...int) []time.Duration {
 	var d []time.Duration
 	for _, x := range v {

@@ -42,6 +42,24 @@ func stable(v []float64) bool {
 	return math.Sqrt(sq/mad) < sdt*w[mad-1]
 }
 
+// settledFrom is the first interval behind the mad moving averages that settled a
+// goodput, given n intervals when stable first held.
+func settledFrom(n int) int { return n - 2*mad + 1 }
+
+// spanGoodput is a settled goodput's phase value in bit/s: the mean of series
+// (counted bytes per interval of id) from interval first to the end. steady
+// reports whether it was still settled at the end: the last mad moving averages
+// of ma pass stable and the latest lies within sdt of the mean.
+func spanGoodput(series []int64, ma []float64, first int, payload float64, id time.Duration) (bps float64, steady bool) {
+	span := series[first:]
+	var sum int64
+	for _, b := range span {
+		sum += b
+	}
+	bps = float64(sum) * 8 * payload / (float64(len(span)) * id.Seconds())
+	return bps, stable(ma) && math.Abs(ma[len(ma)-1]-bps) <= sdt*bps
+}
+
 // trimmedMean is the mean of the best trimKeep of d in milliseconds: the
 // single-sided trimmed mean of §5.3.1. It sorts d in place.
 func trimmedMean(d []time.Duration) (float64, bool) {

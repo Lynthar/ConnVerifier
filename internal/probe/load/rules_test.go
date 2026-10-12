@@ -14,6 +14,7 @@ func settled(spec phaseSpec) phaseResult {
 	r := phaseResult{spec: spec, ran: true, drained: true, stopped: stopSettled, rpmConf: result.High, rpm: responsiveness{rpm: 2000, ok: true}, lagTicks: 1000, cpuKnown: true, cpuBusy: 0.2}
 	for range goodputIDs(spec) {
 		r.gpConf = append(r.gpConf, result.High)
+		r.unsteady = append(r.unsteady, false)
 	}
 	return r
 }
@@ -64,11 +65,13 @@ func TestStatusRules(t *testing.T) {
 		{"3 a phase broke", with(func(p *phaseResult) { p.stopped, p.err = stopError, broke }), valid, result.Warn, "load.inference.aborted"},
 		{"3 a phase was interrupted", with(func(p *phaseResult) { p.stopped = stopInterrupted }), valid, result.Warn, "load.inference.interrupted"},
 		{"3 goodput not settled", with(func(p *phaseResult) { p.stopped, p.gpConf = stopBudget, []int{result.Low} }), valid, result.Warn, "load.inference.not_saturated"},
+		{"3 goodput no longer settled at the end", with(func(p *phaseResult) { p.gpConf, p.unsteady = []int{result.Medium}, []bool{true} }), valid, result.Warn, "load.inference.goodput_unsteady"},
 		{"3 responsiveness not settled", with(func(p *phaseResult) { p.stopped, p.rpmConf = stopTime, result.Medium }), valid, result.Warn, "load.inference.rpm_unsettled"},
 		{"3 poor responsiveness", with(func(p *phaseResult) { p.rpm.rpm = 299 }), valid, result.Warn, "load.inference.rpm_poor"},
 		{"3 load connections that did not open", with(func(p *phaseResult) { p.connFailed = 2 }), valid, result.Warn, "load.inference.connect_failures"},
 		{"4 clean", clean(), valid, result.Pass, ""},
 		{"a capped phase that settled is valid", with(func(p *phaseResult) { p.capped = true }), valid, result.Pass, ""},
+		{"a capped phase that settled and then swung is valid", with(func(p *phaseResult) { p.capped, p.gpConf, p.unsteady = true, []int{result.Medium}, []bool{true} }), valid, result.Warn, "load.inference.goodput_unsteady"},
 		{"5% late wake-ups are still valid", with(func(p *phaseResult) { p.lagOver = 50 }), valid, result.Pass, ""},
 		{"1% late probes are still valid", clean(), validity{slipped: 10, slipSent: 1000, cpuMax: 0.875}, result.Pass, ""},
 		{"300 RPM is not poor", with(func(p *phaseResult) { p.rpm.rpm = 300 }), valid, result.Pass, ""},

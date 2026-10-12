@@ -204,6 +204,8 @@ type direction struct {
 	series    []int64      // bytes per completed interval
 	ma        []float64    // moving averages over full windows, bit/s
 	settled   bool
+	first     int          // once settled, the first interval of the phase value
+	steady    bool         // settled and, at the phase end, still so
 	conns     int          // load connections opened, including those that never carried their stream
 	failed    atomic.Int64 // of those, how many failed before they did
 	carried   atomic.Int64 // of those, how many did
@@ -262,7 +264,8 @@ type phaseResult struct {
 	bytes         int64
 	rpm           responsiveness
 	rpmConf       int
-	gpConf        []int // per direction
+	gpConf        []int  // per direction
+	unsteady      []bool // per direction: settled, but no longer at the phase end
 	self          []time.Duration
 	foreign       []time.Duration // TCP + TLS + HTTP of each foreign probe
 	lagTicks      uint64
@@ -769,7 +772,9 @@ loop:
 					}
 					d.ma = append(d.ma, float64(sum)*8*d.payload/(mad*id.Seconds()))
 				}
-				d.settled = d.settled || stable(d.ma)
+				if !d.settled && stable(d.ma) {
+					d.settled, d.first = true, settledFrom(len(d.series))
+				}
 				settled = settled && d.settled
 				bps += d.rate(id)
 			}
@@ -838,12 +843,16 @@ loop:
 	}
 	for _, d := range p.dirs {
 		d.finalBPS = d.rate(id)
+		if d.settled {
+			d.finalBPS, d.steady = spanGoodput(d.series, d.ma, d.first, d.payload, id)
+		}
 		if len(d.series) == 0 { // stopped within the first interval
 			if el := r.end.Sub(d.started).Seconds(); el > 0 {
 				d.finalBPS = float64(d.atEnd) * 8 * d.payload / el
 			}
 		}
-		r.gpConf = append(r.gpConf, confidence(len(d.series), d.settled))
+		r.gpConf = append(r.gpConf, confidence(len(d.series), d.steady))
+		r.unsteady = append(r.unsteady, d.settled && !d.steady)
 	}
 	if r.settledAt.IsZero() || !r.rpm.ok {
 		f, s := p.window(r.end.Add(-mad*id), r.end)

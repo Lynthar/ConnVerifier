@@ -546,6 +546,27 @@ func TestL9BloatedUplink(t *testing.T) {
 	}
 }
 
+// L10: the same uplink without loss. The 2 s queue overflows and its losses come
+// together, so the node reads nothing for a second and then a burst. Upload
+// goodput is never above C, and a value below 0.93 C is not reported as settled.
+func TestL10OverflowingUplink(t *testing.T) {
+	l := newLab(t)
+	l.shape(false, "10ms", "100mbit", "40ms", false)
+	l.shape(true, "10ms", "10mbit", "2s", false)
+	for run := range 3 {
+		_, _, loads := l.check([]string{"-duration", "10s"})
+		for k, ld := range loads {
+			ceil := loadKinds[k].ceiling(10e6)
+			up, m := value(ld, "upload.goodput")
+			conf, _ := value(ld, "upload.goodput.confidence")
+			t.Logf("run %d %s: upload %.2f Mbit/s (ceiling %.2f) confidence %v at least %v; %s", run, loadKinds[k].id, up, ceil, conf, m.AtLeast, summary(ld))
+			if ld.Status == result.Error || up <= 0 || up > 1.005*ceil || conf == result.High && up < 0.93*ceil {
+				t.Errorf("run %d %s outside the contract", run, loadKinds[k].id)
+			}
+		}
+	}
+}
+
 // Q-B1: the node's QUIC port dropped, STAMP and TCP untouched, behind a
 // 100 Mbit/s link so that the network, not this host, bounds tcp-load. quic-load
 // fails and names QUIC as what was blocked; tcp-load still measures.

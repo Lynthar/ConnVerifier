@@ -87,8 +87,13 @@ time, in a session of its own.
   Counting anywhere else is wrong: above the socket HTTP/2 holds a download before
   the application reads it, and bytes written on the sending side include what is
   still in flight, which grows with a deep queue (by 6% on a 10 Mbit/s link with a
-  2 s queue). A phase's goodput is the latest moving average; before four intervals
-  have run, the mean so far.
+  2 s queue). A phase's goodput, once it settled, is the mean per second over the
+  intervals from the first behind the four moving averages that settled it to the
+  end of the phase; if it never settled, the latest moving average, or before four
+  intervals have run, the mean so far. One moving average is not enough: on a deep
+  queue a loss holds back what follows it on that connection until the
+  retransmission arrives a round trip later, so the node reads in bursts that a
+  four-second window can take in or miss.
 - **Traffic (`bytes`):** bytes on this host's sockets in the load's direction,
   without the deduction.
 - **Payload ceiling** of a link of rate *R* (for verification): Ethernet frames of
@@ -96,10 +101,13 @@ time, in a session of its own.
   `R × 1448/1514 × 16384/16406 ≈ 0.955 R`.
 - **Confidence** (draft §5.4.1), for goodput and for responsiveness: `low` when
   fewer than four intervals of that stage ran, `medium` when they ran but it did not
-  settle, `high` when it settled. Responsiveness has no intervals before goodput
-  settles.
-- **Lower bound (`at_least`):** a goodput whose confidence is not `high` is
-  reported as "≥": the run stopped before it could show the path carries no more.
+  settle, `high` when it settled. A goodput is `high` only if it was still settled
+  at the end of the phase: its last four moving averages pass the same test and the
+  latest lies within 5% of the phase value; one that settled and then swung is
+  `medium`. Responsiveness has no intervals before goodput settles.
+- **Lower bound (`at_least`):** a goodput that never settled is reported as "≥":
+  the run stopped before it could show the path carries no more. One that settled
+  and then swung is not, as its error can go either way.
 - **Round trips under load:** independent probes sent from the moment goodput
   settled to the end of the phase; if it never settled, from four intervals before
   the end. Defined exactly as in `udp-baseline` and `tcp-baseline`; `…increase` is
@@ -212,7 +220,7 @@ is `PASS`.
 | 0 | The run was interrupted before any phase | `INVALID` |
 | 1 | Every phase stopped because a load connection failed | `ERROR`, with the first error |
 | 2 | A validity condition of section 5 | `INVALID`, a warning per condition |
-| 3 | A phase stopped by a failure or an interruption; load connections that did not open; goodput not settled; responsiveness not settled; or RPM below 300 | `WARN` |
+| 3 | A phase stopped by a failure or an interruption; load connections that did not open; goodput not settled, or no longer settled at the end of the phase; responsiveness not settled; or RPM below 300 | `WARN` |
 | 4 | otherwise | `PASS` |
 
 Every result notes that the bottleneck's side and other traffic were not

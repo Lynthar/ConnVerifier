@@ -246,6 +246,7 @@
   "load.inference.interrupted": "{phase}: interrupted; no complete result.",
   "load.inference.aborted": "{phase}: a load connection broke and the phase stopped: {error}",
   "load.inference.not_saturated": "{phase}: goodput did not settle before {why}, so it is a lower bound — the path may carry more.",
+  "load.inference.goodput_unsteady": "{phase}: goodput settled, then moved by more than 5% before the phase ended; the value is its mean since it settled. On a long, deeply queued path the node receives in bursts a round trip apart.",
   "load.inference.rpm_unsettled": "{phase}: responsiveness did not settle and may not reflect the full queue.",
   "load.inference.rpm_poor": "{phase}: responsiveness {rpm} RPM, below 300 — round trips above 200 ms while the path is loaded, which the draft calls poor.",
   "load.not_proven.bottleneck_side": "Where the bottleneck is — this connection, the networks between, or the node's own uplink — is not determined.",

@@ -77,6 +77,20 @@ func goodputIDs(spec phaseSpec) []string {
 	return []string{spec.name + ".goodput"}
 }
 
+// lowerBound reports whether the goodput of p's direction i never settled, so its
+// value is a lower bound; one that settled and then swung is not.
+func (p phaseResult) lowerBound(i int) bool { return p.gpConf[i] != result.High && !p.unsteady[i] }
+
+// anyLowerBound reports whether a goodput of p never settled.
+func (p phaseResult) anyLowerBound() bool {
+	for i := range p.gpConf {
+		if p.lowerBound(i) {
+			return true
+		}
+	}
+	return false
+}
+
 // finish turns the phases and the probe streams into the tcp-load result, or the
 // quic-load result when q is set.
 func finish(c *result.Check, phases []phaseResult, ur *echo.UDPRun, tr *echo.TCPRun, notes []result.Message, counts *protocol.LoadCounts, base idle, cfg Config, q *quicPath) {
@@ -95,7 +109,7 @@ func finish(c *result.Check, phases []phaseResult, ur *echo.UDPRun, tr *echo.TCP
 				continue
 			}
 			m := result.Mbps(id, p.dirs[i].finalBPS)
-			m.AtLeast = p.gpConf[i] != result.High
+			m.AtLeast = p.lowerBound(i)
 			c.Metrics = append(c.Metrics, m)
 		}
 		if !p.ran {
@@ -229,7 +243,7 @@ func evaluate(c *result.Check, phases []phaseResult, v validity) {
 		if p.cpuKnown && p.cpuBusy >= v.cpuMax {
 			invalid = append(invalid, msg("load.warning.host_cpu", map[string]any{"phase": p.spec.name, "percent": math.Round(p.cpuBusy * 100)}, "cpu.busy_max"))
 		}
-		if p.capped && slices.Min(p.gpConf) != result.High {
+		if p.capped && p.anyLowerBound() {
 			invalid = append(invalid, msg("load.warning.grant_connections", map[string]any{"phase": p.spec.name, "connections": p.conns}, p.spec.name+".connections"))
 		}
 	}
@@ -263,8 +277,11 @@ func evaluate(c *result.Check, phases []phaseResult, v validity) {
 		if p.connFailed > 0 {
 			warn("load.inference.connect_failures", map[string]any{"phase": name, "count": p.connFailed, "timeout_ms": connectTimeout.Milliseconds()}, name+".connect_failures")
 		}
-		if slices.Min(p.gpConf) != result.High {
+		if p.anyLowerBound() {
 			warn("load.inference.not_saturated", map[string]any{"phase": name, "why": p.stopped}, name+".goodput.confidence")
+		}
+		if slices.Contains(p.unsteady, true) {
+			warn("load.inference.goodput_unsteady", map[string]any{"phase": name}, name+".goodput.confidence")
 		}
 		if p.rpmConf != result.High {
 			warn("load.inference.rpm_unsettled", map[string]any{"phase": name}, name+".rpm.confidence")
