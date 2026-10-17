@@ -121,19 +121,20 @@ is the QUIC payload ceiling of section 4.
 
 | # | Injected | Pass condition | Last result |
 |---|---|---|---|
-| L1 | 20 ms round trip, 20 Mbit/s each way, 40 ms queue | In each of 10 runs: download and upload goodput in [0.93 C, 1.005 C], settled; neither direction of both together above its C | 10/10: download 96.4–97.1% of C, upload 94.6–96.1% |
-| L2 | As L1 at 100 Mbit/s | As L1; and never this host or the node reported as the limit | 10/10: download 98.6–99.1%, upload 97.0–98.6% |
-| L3 | 100 Mbit/s down, 10 Mbit/s up | As L1, 5 runs | 5/5: download 98.5–99.1%, upload 93.3–95.0% |
-| L4 | 20 Mbit/s, 200 ms FIFO queue | Independent UDP and TCP p50 under load in [170, 240] ms; RPM below 300 | 3/3: UDP 202–210 ms, TCP 203–213 ms; 280–285 RPM |
-| L5 | As L4 with `fq_codel` in the queue | UDP p50 under load at most 15 ms above idle; self probes slower than foreign ones | 3/3: UDP at most idle; self 46–55 ms, foreign 46–47 ms |
-| L6 | 1 Gbit/s; this host limited to a tenth of a CPU | `INVALID` for this host, 10 of 10 runs | 10/10; 41–79% of wake-ups late per phase |
+| L1 | 20 ms round trip, 20 Mbit/s each way, 40 ms queue | In each of 10 runs: download and upload goodput in [0.93 C, 1.005 C], settled; neither direction of both together above its C | 10/10: download 96.6–96.8% of C, upload 94.6–95.0% |
+| L2 | As L1 at 100 Mbit/s | As L1; and never this host or the node reported as the limit | 10/10: download 98.1–98.5%, upload 97.3–97.6% |
+| L3 | 100 Mbit/s down, 10 Mbit/s up | As L1, 5 runs | 5/5: download 98.3–98.5%, upload 93.7–94.0% |
+| L4 | 20 Mbit/s, 200 ms FIFO queue | Independent UDP and TCP p50 under load in [170, 240] ms; RPM below 300 | 3/3: UDP 200–211 ms, TCP 202–226 ms; 279–287 RPM |
+| L5 | As L4 with `fq_codel` in the queue | UDP p50 under load at most 15 ms above idle; self and foreign probes recorded, no bound (section 6) | 3/3: UDP at most idle; self 45–51 ms, foreign 44–45 ms |
+| L6 | 1 Gbit/s; this host limited to a tenth of a CPU | `INVALID` for this host, 10 of 10 runs | 10/10; 44–81% of wake-ups late per phase |
 | L8 | 100 Mbit/s; the node grants 50 MB | Every phase a lower bound; the node moves at most 50 MB | passed |
-| L9 | 100 Mbit/s down; 10 Mbit/s up with a 2 s queue and 1% loss | In each of 3 runs: no phase aborted; upload goodput reported and at most C | 3/3: upload 8.71–8.89 Mbit/s (C 9.50) |
+| L9 | 100 Mbit/s down; 10 Mbit/s up with a 2 s queue and 1% loss | In each of 3 runs: no phase aborted; upload goodput reported and at most C | 3/3: upload 8.85–9.10 Mbit/s (C 9.50) |
+| L10 | As L9 without the loss | In each of 3 runs: upload goodput reported and at most C; below 0.93 C, not of `high` confidence | 3/3: upload 8.93–8.94 Mbit/s (C 9.50), `high` |
 | B1 | The node's QUIC port dropped, STAMP and TCP open | `ERROR` with the inference that QUIC was blocked; `tcp-load` unaffected | passed; `tcp-load` `WARN` |
-| B2 | Unprivileged client, Linux default buffers, 100 ms round trip | Buffers reported below 7 MiB with the note; nothing from quic-go on stderr | passed: 416 KiB, the note, a clean stderr; `PASS` |
-| C1 | As L2 | QUIC/TCP goodput ratio recorded, no bound: what the two reach without any rate limit | download 0.987–0.992, upload 0.981–0.997 |
+| B2 | Unprivileged client, Linux default buffers, 100 ms round trip | Buffers reported below 7 MiB with the note; nothing from quic-go on stderr | passed: 416 KiB, the note, a clean stderr; `WARN` for responsiveness alone |
+| C1 | As L2 | QUIC/TCP goodput ratio recorded, no bound: what the two reach without any rate limit | download 0.993–1.001, upload 0.996–0.999 |
 
-Last run: 2026-10-10 and 11, Linux 6.8 (Ubuntu 24.04, arm64 virtual machine), Go
+Last run: 2026-10-12, Linux 6.8 (Ubuntu 24.04, arm64 virtual machine), Go
 1.27.1, quic-go v0.63.0. In-memory tests check the same plumbing: goodput behind a
 shared 32 Mbit/s token bucket settles at 96% of it, the share of the datagrams'
 bytes that is body.

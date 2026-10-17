@@ -324,7 +324,7 @@ func TestGoodputSettlesAtTheBottleneck(t *testing.T) {
 		conf := value(t, c, strings.TrimSuffix(id, "goodput")+"goodput.confidence")
 		t.Logf("%s %v Mbit/s at least %v, confidence %v", id, *m.Value, m.AtLeast, conf)
 		if got := *m.Value; got < 0.9*rate*8/1e6 || got > 1.02*rate*8/1e6 {
-			t.Errorf("%s = %v Mbit/s; want the 32 Mbit/s bottleneck less framing and probes", id, got)
+			t.Errorf("%s = %v Mbit/s; want the %v Mbit/s bottleneck less framing and probes", id, got, rate*8/1e6)
 		}
 		if conf != result.High || m.AtLeast {
 			t.Errorf("%s: confidence %v, at least %v; want settled", id, conf, m.AtLeast)
@@ -374,7 +374,7 @@ func TestQUICGoodputSettlesAtTheBottleneck(t *testing.T) {
 		conf := value(t, c, strings.TrimSuffix(id, "goodput")+"goodput.confidence")
 		t.Logf("%s %v Mbit/s at least %v, confidence %v", id, *m.Value, m.AtLeast, conf)
 		if got := *m.Value; got < 0.9*rate*8/1e6 || got > 1.02*rate*8/1e6 {
-			t.Errorf("%s = %v Mbit/s; want the 32 Mbit/s bottleneck less framing and probes", id, got)
+			t.Errorf("%s = %v Mbit/s; want the %v Mbit/s bottleneck less framing and probes", id, got, rate*8/1e6)
 		}
 		if conf != result.High || m.AtLeast {
 			t.Errorf("%s: confidence %v, at least %v; want settled", id, conf, m.AtLeast)

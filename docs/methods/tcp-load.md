@@ -89,11 +89,13 @@ time, in a session of its own.
   still in flight, which grows with a deep queue (by 6% on a 10 Mbit/s link with a
   2 s queue). A phase's goodput, once it settled, is the mean per second over the
   intervals from the first behind the four moving averages that settled it to the
-  end of the phase; if it never settled, the latest moving average, or before four
-  intervals have run, the mean so far. One moving average is not enough: on a deep
-  queue a loss holds back what follows it on that connection until the
-  retransmission arrives a round trip later, so the node reads in bursts that a
-  four-second window can take in or miss.
+  end of the phase. If its last four moving averages still pass that test but the
+  latest lies more than 5% from this mean, it settled again later, and the value is
+  the mean over the seven intervals those four cover. If it never settled, the
+  value is the latest moving average, or before four intervals have run, the mean
+  so far. One moving average is not enough: on a deep queue a loss holds back what
+  follows it on that connection until the retransmission arrives a round trip
+  later, so the node reads in bursts that a four-second window can take in or miss.
 - **Traffic (`bytes`):** bytes on this host's sockets in the load's direction,
   without the deduction.
 - **Payload ceiling** of a link of rate *R* (for verification): Ethernet frames of
@@ -102,9 +104,9 @@ time, in a session of its own.
 - **Confidence** (draft §5.4.1), for goodput and for responsiveness: `low` when
   fewer than four intervals of that stage ran, `medium` when they ran but it did not
   settle, `high` when it settled. A goodput is `high` only if it was still settled
-  at the end of the phase: its last four moving averages pass the same test and the
-  latest lies within 5% of the phase value; one that settled and then swung is
-  `medium`. Responsiveness has no intervals before goodput settles.
+  at the end of the phase, its last four moving averages passing the same test; one
+  that settled and then swung is `medium`. Responsiveness has no intervals before
+  goodput settles.
 - **Lower bound (`at_least`):** a goodput that never settled is reported as "≥":
   the run stopped before it could show the path carries no more. One that settled
   and then swung is not, as its error can go either way.
@@ -183,19 +185,17 @@ probes. Run with the default parameters and a 10 s idle stage.
 
 | # | Injected | Pass condition | Last result |
 |---|---|---|---|
-| L1 | 20 ms round trip, 20 Mbit/s each way, 40 ms queue | In each of 10 runs: download and upload goodput in [0.93 C, 1.005 C], settled; neither direction of both together above its C | 10/10: download 96.9–97.5% of C, upload 96.1–97.4% |
-| L2 | As L1 at 100 Mbit/s | As L1; and never this host or the node reported as the limit (also L7) | 10/10: download 99.4%, upload 98.0–99.1%; never this host or the node as the limit |
-| L3 | 100 Mbit/s down, 10 Mbit/s up | As L1, 5 runs | 5/5: download 98.7–99.4%, upload 95.0–95.7% |
-| L4 | 20 Mbit/s, 200 ms FIFO queue | Independent UDP and TCP p50 under load in [170, 240] ms; RPM below 300 | 3/3: UDP 212–221 ms, TCP 213–220 ms; 164–199 RPM |
-| L5 | As L4 with `fq_codel` in the queue | UDP p50 under load at most 15 ms above idle; self probes slower than foreign ones | 3/3: UDP at most idle; self 262–730 ms, foreign 69–72 ms |
-| L6 | 1 Gbit/s; this host limited to a tenth of a CPU | `INVALID` for this host, 10 of 10 runs | 10/10; 45–91% of wake-ups late per phase |
+| L1 | 20 ms round trip, 20 Mbit/s each way, 40 ms queue | In each of 10 runs: download and upload goodput in [0.93 C, 1.005 C], settled; neither direction of both together above its C | 10/10: download 96.6–96.9% of C, upload 95.7–96.1% |
+| L2 | As L1 at 100 Mbit/s | As L1; and never this host or the node reported as the limit (also L7) | 10/10: download 97.9–98.3%, upload 97.0–97.4%; never this host or the node as the limit |
+| L3 | 100 Mbit/s down, 10 Mbit/s up | As L1, 5 runs | 5/5: download 97.8–98.3%, upload 95.1–95.2% |
+| L4 | 20 Mbit/s, 200 ms FIFO queue | Independent UDP and TCP p50 under load in [170, 240] ms; RPM below 300 | 3/3: UDP 205–223 ms, TCP 207–219 ms; 169–202 RPM |
+| L5 | As L4 with `fq_codel` in the queue | UDP p50 under load at most 15 ms above idle; self probes slower than foreign ones | 3/3: UDP at most idle; self 265–724 ms, foreign 64–70 ms |
+| L6 | 1 Gbit/s; this host limited to a tenth of a CPU | `INVALID` for this host, 10 of 10 runs | 10/10; 12–61% of wake-ups late per phase |
 | L8 | 100 Mbit/s; the node grants 50 MB | Every phase a lower bound; the node moves at most 50 MB | passed |
-| L9 | 100 Mbit/s down; 10 Mbit/s up with a 2 s queue and 1% loss | In each of 3 runs: no phase aborted; upload goodput reported and at most C | not met: no phase aborted in 9 runs, but 4 uploads above C — 9.63–9.80 Mbit/s against 9.55, up to 2.6%; the others 8.65–9.31 |
+| L9 | 100 Mbit/s down; 10 Mbit/s up with a 2 s queue and 1% loss | In each of 3 runs: no phase aborted; upload goodput reported and at most C | 3/3: upload 8.86–9.06 Mbit/s (C 9.55) |
+| L10 | As L9 without the loss | In each of 3 runs: upload goodput reported and at most C; below 0.93 C, not of `high` confidence | 3/3: upload 8.14–8.22 Mbit/s (C 9.55), `medium` |
 
-Last run: 2026-10-10 and 11, Linux 6.8 (Ubuntu 24.04, arm64 virtual machine), Go 1.27.1.
-On L9 the upload estimate can exceed C: after a loss, the bytes held behind the
-retransmission reach the node together a 2 s round trip later, and a four-second
-moving average can take in such a batch.
+Last run: 2026-10-12, Linux 6.8 (Ubuntu 24.04, arm64 virtual machine), Go 1.27.1.
 In-memory tests check the same plumbing: goodput behind a shared 32 Mbit/s token
 bucket settles within 3% of it.
 

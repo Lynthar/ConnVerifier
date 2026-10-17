@@ -246,7 +246,7 @@
   "load.inference.interrupted": "{phase}：被中断，没有完整结果。",
   "load.inference.aborted": "{phase}：负载连接断开，本阶段中止：{error}",
   "load.inference.not_saturated": "{phase}：goodput 在{why}前没有稳定，只是下限——这条路径可能还能跑得更多。",
-  "load.inference.goodput_unsteady": "{phase}：goodput 判稳定后，到阶段结束前又波动超过 5%，报的是判稳定以来的均值。负载下往返长、队列深时，节点按往返成批收到数据。",
+  "load.inference.goodput_unsteady": "{phase}：goodput 判稳定后，到阶段结束时已不再稳定，报的是判稳定以来的均值。负载下往返长、队列深时，节点按往返成批收到数据。",
   "load.inference.rpm_unsettled": "{phase}：响应度没有稳定，可能还没反映出完整的排队。",
   "load.inference.rpm_poor": "{phase}：响应度 {rpm} RPM，低于 300——路径跑满时往返超过 200 ms，草案归为「差」。",
   "load.not_proven.bottleneck_side": "瓶颈在哪——本机这条宽带、中间网络，还是节点所在机房的上行——没有判定。",

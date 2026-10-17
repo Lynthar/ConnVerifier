@@ -462,7 +462,8 @@ func TestL4BloatedQueue(t *testing.T) {
 }
 
 // L5: the same queue under fq_codel: the independent probes, sparse flows, stay
-// near idle while requests on the load connections wait behind their own data.
+// near idle; over TCP requests on the load connections wait behind their own data.
+// QUIC's self probes wait only for their connection's share: logged, not judged.
 func TestL5FlowQueuing(t *testing.T) {
 	idle, loads := queueRuns(t, true, 3)
 	for run, lds := range loads {
@@ -472,7 +473,7 @@ func TestL5FlowQueuing(t *testing.T) {
 				self, _ := value(ld, phase+".self.p50")
 				foreign, _ := value(ld, phase+".foreign.p50")
 				t.Logf("run %d %s %s: udp p50 %.1f (idle %.1f) self %.1f foreign %.1f ms", run, loadKinds[k].id, phase, udp, idle[run], self, foreign)
-				if udp > idle[run]+15 || self <= foreign {
+				if udp > idle[run]+15 || loadKinds[k].id == "tcp-load" && self <= foreign {
 					t.Errorf("run %d %s %s outside the contract", run, loadKinds[k].id, phase)
 				}
 			}
