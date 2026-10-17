@@ -146,8 +146,10 @@ func TestPhasesStopAtTheTrafficLimit(t *testing.T) {
 	if tr == nil || tr.LagTicks == 0 {
 		t.Fatalf("node traffic %+v", tr)
 	}
-	// Uploads are counted as handed to the transport, so a little may be in flight.
-	if node := float64(tr.SentBytes + tr.ReceivedBytes); node > client || node < client-4e6 {
+	// The node counts body bytes handed to and read from HTTP/2, this host bytes on
+	// its sockets: what was in flight when a phase ended counts on the sender's side
+	// only, so either may be ahead by that much.
+	if node := float64(tr.SentBytes + tr.ReceivedBytes); node > client+4e6 || node < client-4e6 {
 		t.Errorf("node counted %v bytes, client %v", node, client)
 	}
 	n.stop()
