@@ -249,5 +249,5 @@ request.
 | Load connections per session, TCP or QUIC | 48 | `invite create -max-load-connections` |
 | HTTP/3 port | the TCP port + 1 (`off`: none) | `serve -listen-quic`; `serve -quic-port` sets the port granted, behind a port mapping |
 | Connections not yet past TLS or HELLO | 32 per address, 1 024 in total, plus the load connections of the address's live load sessions | fixed |
-| Open control-plane connections | 8 per address, 512 in total, plus the same | fixed |
+| Control-plane connections, counted from their first TLS byte; one beyond is closed before its handshake completes | 8 per address, 512 in total, plus the same | fixed |
 | Control-plane requests | 10 per second per address; load requests of a live load session are not counted | fixed |

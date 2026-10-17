@@ -351,6 +351,54 @@ func TestServeCapsUnprovenConnectionsPerAddress(t *testing.T) {
 	}
 }
 
+// HTTPS connections from an address are capped before the TLS handshake, so one
+// over the cap fails to open rather than losing a request it started; one closing
+// makes room for the next.
+func TestServeCapsHTTPSBeforeHandshake(t *testing.T) {
+	s, inv := testServer(t, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ln := memnet.NewListener()
+	go s.serve(ctx, ln, nil, nil)
+	handshake := func() (*tls.Conn, error) {
+		c, _ := ln.Dial(ctx, "", "")
+		c.SetDeadline(time.Now().Add(5 * time.Second))
+		tc := tls.Client(c, protocol.ClientTLS(inv.Pin))
+		return tc, tc.Handshake()
+	}
+
+	var live []*tls.Conn
+	for range maxHTTPPerIP {
+		tc, err := handshake()
+		if err != nil {
+			t.Fatalf("handshake %d within the cap: %v", len(live)+1, err)
+		}
+		live = append(live, tc)
+	}
+	if tc, err := handshake(); err == nil {
+		tc.Close()
+		t.Fatal("a handshake beyond the cap")
+	}
+	if n := s.stats.refusedHTTP.Load(); n != 1 {
+		t.Errorf("refused_https = %d, want 1", n)
+	}
+	live[0].Close()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		tc, err := handshake()
+		if err == nil {
+			tc.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no room after a connection closed")
+		}
+	}
+	for _, tc := range live[1:] {
+		tc.Close()
+	}
+}
+
 func apiRequest(t *testing.T, s *server, method, path, token, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest(method, path, strings.NewReader(body))

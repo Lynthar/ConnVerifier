@@ -16,7 +16,8 @@ import (
 const tlsHandshakeRecord = 0x16
 
 // pending counts connections per source address against a limit: unproven ones
-// (accept to TLS handshake or HELLO) and, separately, open control connections.
+// (accept to TLS handshake or HELLO) and, separately, control connections from
+// the start of their handshake.
 // An address with a load grant may go over both limits by its allowance.
 type pending struct {
 	mu              sync.Mutex
@@ -76,17 +77,20 @@ func (s *server) route(ctx context.Context, conn net.Conn, addr netip.Addr, http
 
 	switch first[0] {
 	case tlsHandshakeRecord:
-		tc := tls.Server(pc, s.tls)
-		if err := tc.HandshakeContext(ctx); err != nil {
-			conn.Close()
-			return
-		}
-		release()
+		// Refusing before the handshake lets a client count the connection as not
+		// opened instead of losing a request body it already started to send.
 		if !s.httpConns.acquire(addr, s.store.loadAllowance(addr)) {
 			s.stats.refusedHTTP.Add(1)
 			conn.Close()
 			return
 		}
+		tc := tls.Server(pc, s.tls)
+		if err := tc.HandshakeContext(ctx); err != nil {
+			s.httpConns.release(addr)
+			conn.Close()
+			return
+		}
+		release()
 		conn.SetDeadline(time.Time{}) // the HTTP server sets its own from here
 		if !httpLn.deliver(tc) {
 			s.httpConns.release(addr) // never reached the server, so no ConnState will
