@@ -2,6 +2,8 @@ module github.com/Lynthar/ConnVerifier
 
 go 1.26.0
 
+toolchain go1.26.10
+
 require (
 	github.com/quic-go/quic-go v0.63.0
 	golang.org/x/sys v0.48.0
