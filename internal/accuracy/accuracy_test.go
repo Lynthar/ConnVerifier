@@ -147,6 +147,37 @@ func (l *lab) shape(forward bool, delay, rate, queue string, fq bool) {
 	}
 }
 
+// police makes each direction a 10 ms netem delay and, at the receiving end, a
+// policer that drops above rate (Mbit/s) with 5 ms of burst: a bottleneck without a
+// queue. GRO is off there, so the policer meters the packets as sent.
+func (l *lab) police(mbit int) {
+	for _, x := range []struct {
+		forward        bool
+		recvNS, recvIf string
+	}{{true, nodeNS, nodeIf}, {false, clientNS, clientIf}} {
+		l.netem(x.forward, "delay 10ms limit 100000")
+		sh(l.t, "ip", "netns", "exec", x.recvNS, "ethtool", "-K", x.recvIf, "gro", "off")
+		sh(l.t, "tc", "-n", x.recvNS, "qdisc", "add", "dev", x.recvIf, "handle", "ffff:", "ingress")
+		sh(l.t, "tc", "-n", x.recvNS, "filter", "add", "dev", x.recvIf, "parent", "ffff:", "matchall", "action", "police",
+			"rate", fmt.Sprintf("%dmbit", mbit), "burst", fmt.Sprint(mbit*1e6/8/200), "conform-exceed", "drop")
+	}
+}
+
+// shallow makes each direction a 10 ms netem delay and a token bucket of rate
+// (Mbit/s) with about 2 ms of queue: 1 ms of burst and 1 ms of latency.
+func (l *lab) shallow(mbit int) {
+	for _, forward := range []bool{true, false} {
+		ns, ifc := nodeNS, nodeIf
+		if forward {
+			ns, ifc = clientNS, clientIf
+		}
+		exec.Command("tc", "-n", ns, "qdisc", "del", "dev", ifc, "root").Run()
+		sh(l.t, "tc", "-n", ns, "qdisc", "add", "dev", ifc, "root", "handle", "1:", "netem", "limit", "100000", "delay", "10ms")
+		sh(l.t, "tc", "-n", ns, "qdisc", "add", "dev", ifc, "parent", "1:1", "handle", "10:", "tbf", "rate", fmt.Sprintf("%dmbit", mbit),
+			"burst", fmt.Sprint(mbit*1e6/8/1000), "latency", "1ms")
+	}
+}
+
 // baselineOnly keeps the load stage of a check to a second per phase, for the
 // scenarios that judge the idle checks only.
 var baselineOnly = []string{"-load-time", "1s", "-load-mb", "1"}
@@ -372,10 +403,29 @@ func summary(c result.Check) string {
 	return fmt.Sprintf("%s lag %.0f/%.0f cpu %.1f%% %s", c.Status, late, ticks, cpu, strings.Join(k, " "))
 }
 
+// inferred lists a check's inference keys.
+func inferred(c result.Check) []string {
+	var k []string
+	for _, m := range c.Inferences {
+		k = append(k, m.Key)
+	}
+	return k
+}
+
 // hostBound reports whether the load check found this host or the node too slow.
 func hostBound(c result.Check) bool {
-	w := warnings(c)
-	return strings.Contains(w, "load.warning.host_") || strings.Contains(w, "load.warning.node_lag")
+	k := inferred(c)
+	return slices.Contains(k, "load.inference.host_limited") || slices.Contains(k, "load.inference.node_limited")
+}
+
+// goodputBounded reports whether every goodput of c that has a value is a lower bound.
+func goodputBounded(c result.Check) bool {
+	for _, m := range c.Metrics {
+		if m.Unit == result.UnitMbps && m.Value != nil && !m.AtLeast {
+			return false
+		}
+	}
+	return true
 }
 
 // goodputRuns shapes both directions to down and up bit/s over a 20 ms round
@@ -410,7 +460,7 @@ func goodputRuns(t *testing.T, down, up float64, runs int) {
 				t.Errorf("run %d %s: both directions above their ceilings", run, kind.id)
 			}
 			if hostBound(ld) {
-				t.Errorf("run %d %s: host or node reported as the limit at %v bit/s: %s", run, kind.id, down, warnings(ld))
+				t.Errorf("run %d %s: host or node reported as the limit at %v bit/s: %v", run, kind.id, down, inferred(ld))
 			}
 		}
 		for _, phase := range []string{"download", "upload"} {
@@ -482,7 +532,7 @@ func TestL5FlowQueuing(t *testing.T) {
 }
 
 // L6: a client held to a tenth of a core behind a 1 Gbit/s link is reported as
-// the limit, not the network.
+// the possible limit, not the network: every goodput a lower bound.
 func TestL6ThrottledClient(t *testing.T) {
 	l := newLab(t)
 	l.shape(false, "1ms", "1gbit", "20ms", false)
@@ -491,8 +541,8 @@ func TestL6ThrottledClient(t *testing.T) {
 		_, _, loads := l.check([]string{"-duration", "10s"}, "systemd-run", "--quiet", "--scope", "-p", "CPUQuota=10%")
 		for k, ld := range loads {
 			t.Logf("run %d %s: %s", run, loadKinds[k].id, summary(ld))
-			if ld.Status != result.Invalid || !strings.Contains(warnings(ld), "load.warning.host_") {
-				t.Errorf("run %d %s: %s, want INVALID for this host", run, loadKinds[k].id, ld.Status)
+			if ld.Status != result.Warn || !hostBound(ld) || !goodputBounded(ld) {
+				t.Errorf("run %d %s: %s %v, want WARN with this host the possible limit and every goodput a lower bound", run, loadKinds[k].id, ld.Status, inferred(ld))
 			}
 		}
 	}
@@ -612,5 +662,59 @@ func TestQB2UnprivilegedBuffers(t *testing.T) {
 	}
 	if strings.Contains(l.stderr, "buffer size") {
 		t.Errorf("quic-go's warning reached stderr:\n%s", l.stderr)
+	}
+}
+
+// senderLoss is the sender loss of upload phase phase in c, percent; -1 if absent.
+func senderLoss(c result.Check, phase string) float64 {
+	id := phase + ".sender_loss"
+	if phase == "bidirectional" {
+		id = "bidirectional.sender_loss.upload"
+	}
+	v, _ := value(c, id)
+	return v
+}
+
+// Q-E1: behind a 300 Mbit/s link with a 200 ms queue, a client held to a tenth of
+// a core still fills it over TCP, not over QUIC: in each of 3 runs tcp-load's upload
+// reaches 0.93 C, and quic-load infers something held QUIC and not TCP: a lower bound.
+func TestQE1QUICHeldByThisHost(t *testing.T) {
+	l := newLab(t, "-max-load-mb", "20000")
+	l.shape(false, "10ms", "300mbit", "200ms", false)
+	l.shape(true, "10ms", "300mbit", "200ms", false)
+	for run := range 3 {
+		_, _, loads := l.check([]string{"-duration", "10s", "-load-mb", "3000", "-yes"}, "systemd-run", "--quiet", "--scope", "-p", "CPUQuota=10%")
+		tcpUp, _ := value(loads[0], "upload.goodput")
+		quicUp, m := value(loads[1], "upload.goodput")
+		t.Logf("run %d: upload tcp %.1f (C %.1f) loss %.3f%%, quic %.1f at least %v loss %.3f%%; %s", run, tcpUp, ceiling(300e6),
+			senderLoss(loads[0], "upload"), quicUp, m.AtLeast, senderLoss(loads[1], "upload"), summary(loads[1]))
+		if tcpUp < 0.93*ceiling(300e6) || !slices.Contains(inferred(loads[1]), "quic_load.inference.quic_held") || !m.AtLeast {
+			t.Errorf("run %d outside the contract", run)
+		}
+	}
+}
+
+// Q-E2: bottlenecks without a queue hold both protocols alike — a 300 Mbit/s
+// policer, and a token bucket with 2 ms of queue: in none of 3 runs each does
+// quic-load infer that something held QUIC and not TCP.
+func TestQE2PathHoldsBoth(t *testing.T) {
+	for _, b := range []struct {
+		name  string
+		setup func(*lab)
+	}{{"police", func(l *lab) { l.police(300) }}, {"shallow", func(l *lab) { l.shallow(300) }}} {
+		t.Run(b.name, func(t *testing.T) {
+			l := newLab(t, "-max-load-mb", "20000")
+			b.setup(l)
+			for run := range 3 {
+				_, _, loads := l.check([]string{"-duration", "10s", "-load-mb", "3000", "-yes"})
+				for _, ph := range []string{"upload", "bidirectional"} {
+					t.Logf("run %d %s: sender loss tcp %.3f%% quic %.3f%%", run, ph, senderLoss(loads[0], ph), senderLoss(loads[1], ph))
+				}
+				t.Logf("run %d: %s", run, summary(loads[1]))
+				if slices.Contains(inferred(loads[1]), "quic_load.inference.quic_held") {
+					t.Errorf("run %d: QUIC inferred held apart from TCP behind a %s bottleneck", run, b.name)
+				}
+			}
+		})
 	}
 }

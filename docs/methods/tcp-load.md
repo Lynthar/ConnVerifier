@@ -88,8 +88,9 @@ time, in a session of its own.
   the application reads it, and bytes written on the sending side include what is
   still in flight, which grows with a deep queue (by 6% on a 10 Mbit/s link with a
   2 s queue). A phase's goodput, once it settled, is the mean per second over the
-  intervals from the first behind the four moving averages that settled it to the
-  end of the phase. If its last four moving averages still pass that test but the
+  intervals from the first of the moving average that settled it, the latest of the
+  four that passed, to the end of the phase; the intervals behind the other three
+  can still be the ramp's tail. If its last four moving averages still pass that test but the
   latest lies more than 5% from this mean, it settled again later, and the value is
   the mean over the seven intervals those four cover. If it never settled, the
   value is the latest moving average, or before four intervals have run, the mean
@@ -108,8 +109,15 @@ time, in a session of its own.
   that settled and then swung is `medium`. Responsiveness has no intervals before
   goodput settles.
 - **Lower bound (`at_least`):** a goodput that never settled is reported as "≥":
-  the run stopped before it could show the path carries no more. One that settled
-  and then swung is not, as its error can go either way.
+  the run stopped before it could show the path carries no more. So is one that
+  this host or the node may have held (section 5): falling behind can only lower a
+  goodput counted where the bytes arrive. One that settled and then swung is not, as
+  its error can go either way.
+- **Sender loss (`sender_loss`),** for a direction this host sends: segments sent
+  again over segments sent, summed over its load connections at the end of the
+  phase as the kernel counts them — data segments from `TCP_INFO` on Linux, packets
+  from `TCP_CONNECTION_INFO` on macOS; not reported elsewhere. With a 95% Wilson
+  interval over the segments sent.
 - **Round trips under load:** independent probes sent from the moment goodput
   settled to the end of the phase; if it never settled, from four intervals before
   the end. Defined exactly as in `udp-baseline` and `tcp-baseline`; `…increase` is
@@ -128,17 +136,28 @@ time, in a session of its own.
 
 ## 5. Validity
 
-The result is `INVALID` when something other than the network shaped it:
+The result is `INVALID` when **the grant held the load**: a phase could not add
+connections because of the node's grant, and its goodput did not settle.
+
+When an end of the path may have held the result, it is reported and qualified.
+Falling behind can only lower a goodput, counted where the bytes arrive, and only
+raise round trips, timed at the ends:
 
 - **this host fell behind** in a phase: more than 5% of its timer's wake-ups were
-  more than 10 ms late, or the process used at least all but half a core of the CPU
-  it may use (`GOMAXPROCS`, which follows a container's quota). The timer catches a
-  host throttled by a quota or by other processes, where CPU use itself stays low;
+  more than 10 ms late. That phase's goodput is a lower bound, and round trips and
+  responsiveness under load may include this host's delay. The timer catches a host
+  throttled by a quota or by other processes, where CPU use itself stays low;
+- the independent probes left **more than 1% of their packets over 10 ms late**:
+  round trips and responsiveness under load may include this host's delay;
 - **the node fell behind**: more than 5% of its timer's wake-ups during the session
-  were more than 10 ms late;
-- **the grant held the load**: a phase could not add connections because of the
-  node's grant, and its goodput did not settle;
-- the independent probes left more than 1% of their packets over 10 ms late.
+  were more than 10 ms late. Every phase's goodput is a lower bound, and round
+  trips may include the node's delay.
+
+A phase in which the process used at least all but half a core of the CPU it may
+use (`GOMAXPROCS`, which follows a container's quota, and is at least 2) adds a
+note: use shows what the process got, not whether that was enough. Starved by other
+processes or by a quota, it stays low; on one core it is high without holding the
+goodput.
 
 The 5% limit is set between what section 9 measured: up to 1% late wake-ups
 unthrottled, 11% and more in every phase with a tenth of a core (L6).
@@ -185,17 +204,17 @@ probes. Run with the default parameters and a 10 s idle stage.
 
 | # | Injected | Pass condition | Last result |
 |---|---|---|---|
-| L1 | 20 ms round trip, 20 Mbit/s each way, 40 ms queue | In each of 10 runs: download and upload goodput in [0.93 C, 1.005 C], settled; neither direction of both together above its C | 10/10: download 96.6–96.9% of C, upload 95.7–96.1% |
-| L2 | As L1 at 100 Mbit/s | As L1; and never this host or the node reported as the limit (also L7) | 10/10: download 97.9–98.3%, upload 97.0–97.4%; never this host or the node as the limit |
-| L3 | 100 Mbit/s down, 10 Mbit/s up | As L1, 5 runs | 5/5: download 97.8–98.3%, upload 95.1–95.2% |
-| L4 | 20 Mbit/s, 200 ms FIFO queue | Independent UDP and TCP p50 under load in [170, 240] ms; RPM below 300 | 3/3: UDP 205–223 ms, TCP 207–219 ms; 169–202 RPM |
-| L5 | As L4 with `fq_codel` in the queue | UDP p50 under load at most 15 ms above idle; self probes slower than foreign ones | 3/3: UDP at most idle; self 265–724 ms, foreign 64–70 ms |
-| L6 | 1 Gbit/s; this host limited to a tenth of a CPU | `INVALID` for this host, 10 of 10 runs | 10/10; 12–61% of wake-ups late per phase |
+| L1 | 20 ms round trip, 20 Mbit/s each way, 40 ms queue | In each of 10 runs: download and upload goodput in [0.93 C, 1.005 C], settled; neither direction of both together above its C | 10/10: download 97.1–97.4% of C, upload 95.9–96.5% |
+| L2 | As L1 at 100 Mbit/s | As L1; and never this host or the node reported as the limit (also L7) | 10/10: download 99.4%, upload 98.3–98.9%; never this host or the node as the limit |
+| L3 | 100 Mbit/s down, 10 Mbit/s up | As L1, 5 runs | 5/5: download 99.4%, upload 95.3–96.1% |
+| L4 | 20 Mbit/s, 200 ms FIFO queue | Independent UDP and TCP p50 under load in [170, 240] ms; RPM below 300 | 3/3: UDP 213–219 ms, TCP 208–220 ms; 164–197 RPM |
+| L5 | As L4 with `fq_codel` in the queue | UDP p50 under load at most 15 ms above idle; self probes slower than foreign ones | 3/3: UDP at most idle; self 263–754 ms, foreign 64–69 ms |
+| L6 | 1 Gbit/s; this host limited to a tenth of a CPU | `WARN` with this host the possible limit and every goodput a lower bound, 10 of 10 runs | 10/10; 14–79% of wake-ups late per phase |
 | L8 | 100 Mbit/s; the node grants 50 MB | Every phase a lower bound; the node moves at most 50 MB | passed |
-| L9 | 100 Mbit/s down; 10 Mbit/s up with a 2 s queue and 1% loss | In each of 3 runs: no phase aborted; upload goodput reported and at most C | 3/3: upload 8.86–9.06 Mbit/s (C 9.55) |
-| L10 | As L9 without the loss | In each of 3 runs: upload goodput reported and at most C; below 0.93 C, not of `high` confidence | 3/3: upload 8.14–8.22 Mbit/s (C 9.55), `medium` |
+| L9 | 100 Mbit/s down; 10 Mbit/s up with a 2 s queue and 1% loss | In each of 3 runs: no phase aborted; upload goodput reported and at most C | 3/3: upload 9.09–9.49 Mbit/s (C 9.55) |
+| L10 | As L9 without the loss | In each of 3 runs: upload goodput reported and at most C; below 0.93 C, not of `high` confidence | 3/3: upload 7.83–8.21 Mbit/s (C 9.55), `medium` |
 
-Last run: 2026-10-12, Linux 6.8 (Ubuntu 24.04, arm64 virtual machine), Go 1.27.1.
+Last run: 2026-10-29, Linux 6.8 (Ubuntu 24.04, arm64 virtual machine), Go 1.27.1.
 In-memory tests check the same plumbing: goodput behind a shared 32 Mbit/s token
 bucket settles within 3% of it.
 
@@ -219,13 +238,14 @@ is `PASS`.
 |---|---|---|
 | 0 | The run was interrupted before any phase | `INVALID` |
 | 1 | Every phase stopped because a load connection failed | `ERROR`, with the first error |
-| 2 | A validity condition of section 5 | `INVALID`, a warning per condition |
-| 3 | A phase stopped by a failure or an interruption; load connections that did not open; goodput not settled, or no longer settled at the end of the phase; responsiveness not settled; or RPM below 300 | `WARN` |
+| 2 | The grant held the load (section 5) | `INVALID`, a warning per phase |
+| 3 | A phase stopped by a failure or an interruption; load connections that did not open; goodput not settled, or no longer settled at the end of the phase; responsiveness not settled; RPM below 300; this host or the node fell behind, or the probes were sent late (section 5) | `WARN` |
 | 4 | otherwise | `PASS` |
 
 Every result notes that the bottleneck's side and other traffic were not
-determined. A missing independent probe, failed foreign probes, or a queue that had
-not drained before a phase add a note without changing the status.
+determined. A missing independent probe, failed foreign probes, a queue that had
+not drained before a phase, or a phase's CPU use at the limit of section 5 add a
+note without changing the status.
 
 ## Method version changes
 
@@ -236,3 +256,4 @@ rules change.
 | Version | Change |
 |---|---|
 | 1 | First version. |
+| 2 | This host or the node falling behind, and late probes, report goodput as a lower bound and qualify round trips instead of making the result `INVALID`; CPU use only adds a note. A settled goodput's value starts at the moving average that settled it. Sender loss (`sender_loss`) is reported. |

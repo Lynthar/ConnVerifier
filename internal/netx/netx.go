@@ -66,6 +66,11 @@ func UDPBuffers(pc net.PacketConn) (recv, send int, ok bool) { return udpBuffers
 // or the connection has no such option.
 func SetNotSentLowat(c net.Conn, n int) bool { return setNotSentLowat(c, n) }
 
+// TCPSent reports how many segments c has sent and how many of those it sent
+// again, as the kernel counts them (Linux: data segments; macOS: packets); ok is
+// false where the platform or the connection does not tell.
+func TCPSent(c net.Conn) (sent, resent uint64, ok bool) { return tcpSent(c) }
+
 // WriteFull writes all of data to conn and returns the first error; a write that
 // makes no progress without an error is reported as io.ErrShortWrite.
 func WriteFull(conn net.Conn, data []byte) error {

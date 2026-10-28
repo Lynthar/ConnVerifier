@@ -3,6 +3,7 @@ package load
 import (
 	"math"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/Lynthar/ConnVerifier/internal/probe/echo"
@@ -22,6 +23,92 @@ func beyond(k, n uint64) bool { return k*100 > n }
 // Calibrated in a virtual machine: unthrottled runs reached 1%, a host held to a
 // tenth of a core 11% and more in every phase.
 func lagging(late, n uint64) bool { return late*20 > n }
+
+// The quic-load rule on an upload direction: QUIC's goodput below heldShare of
+// TCP's over the same path, with a sender loss below TCP's or above heldRatio times
+// it, means something held QUIC that did not hold TCP.
+const (
+	heldShare = 0.7
+	heldRatio = 5
+)
+
+// tcpUpload is what tcp-load measured in the upload direction of one phase.
+type tcpUpload struct {
+	bps       float64 // goodput, bit/s; zero when not measured
+	loss      float64 // sender loss, percent
+	lossKnown bool
+}
+
+// tcpUploads collects tcp-load's upload directions per phase from checks, which
+// hold the checks run before; a phase is missing when tcp-load did not measure it.
+func tcpUploads(checks []result.Check) map[string]tcpUpload {
+	ref := make(map[string]tcpUpload)
+	for _, c := range checks {
+		if c.ID != "tcp-load" {
+			continue
+		}
+		get := func(id string) (float64, bool) {
+			for _, m := range c.Metrics {
+				if m.ID == id && m.Value != nil && !m.Insufficient {
+					return *m.Value, true
+				}
+			}
+			return 0, false
+		}
+		for _, spec := range phases {
+			if !spec.up {
+				continue
+			}
+			id := goodputIDs(spec)[len(goodputIDs(spec))-1]
+			if mbps, ok := get(id); ok && mbps > 0 {
+				loss, known := get(lossID(id))
+				ref[spec.name] = tcpUpload{bps: mbps * 1e6, loss: loss, lossKnown: known}
+			}
+		}
+	}
+	return ref
+}
+
+// lossID names the sender-loss metric of the direction whose goodput is id.
+func lossID(goodputID string) string {
+	return strings.Replace(goodputID, ".goodput", ".sender_loss", 1)
+}
+
+// quicHeld applies the quic-load rule to direction i of p, an upload that
+// measured. why, when not empty, names what kept the rule from being applied: the
+// suffix of a quic_load.not_proven.quic_held_ message.
+func quicHeld(p phaseResult, i int, ref map[string]tcpUpload) (fires bool, why string, params map[string]any) {
+	d := p.dirs[i]
+	t, ok := ref[p.spec.name]
+	switch {
+	case !d.sentKnown || d.sent == 0:
+		return false, "no_counters", nil
+	case !ok:
+		return false, "no_tcp", nil
+	case !t.lossKnown:
+		return false, "no_counters", nil
+	case t.loss == 0:
+		return false, "tcp_lossless", nil
+	}
+	q := 100 * float64(d.resent) / float64(d.sent)
+	fires = d.finalBPS < heldShare*t.bps && (q < t.loss || q > heldRatio*t.loss)
+	return fires, "", map[string]any{"phase": p.spec.name, "quic_mbps": math.Round(d.finalBPS/1e5) / 10,
+		"tcp_mbps": math.Round(t.bps/1e5) / 10, "quic_loss": math.Round(q*100) / 100, "tcp_loss": math.Round(t.loss*100) / 100}
+}
+
+// bounded reports whether goodput of direction i of p is only a lower bound: it
+// never settled, or this host, the node or (for a quic-load upload) whatever held
+// QUIC and not TCP may have held it.
+func bounded(p phaseResult, i int, v validity) bool {
+	if p.lowerBound(i) || lagging(p.lagOver, p.lagTicks) || v.nodeBehind() {
+		return true
+	}
+	if v.quic && !p.dirs[i].down {
+		fires, _, _ := quicHeld(p, i, v.tcp)
+		return fires
+	}
+	return false
+}
 
 // quantile is the metric for the nearest-rank quantile at perMille of d, or an
 // insufficient one.
@@ -92,10 +179,13 @@ func (p phaseResult) anyLowerBound() bool {
 }
 
 // finish turns the phases and the probe streams into the tcp-load result, or the
-// quic-load result when q is set.
-func finish(c *result.Check, phases []phaseResult, ur *echo.UDPRun, tr *echo.TCPRun, notes []result.Message, counts *protocol.LoadCounts, base idle, cfg Config, q *quicPath) {
+// quic-load result when q is set; ref is tcp-load's upload directions for quic-load.
+func finish(c *result.Check, phases []phaseResult, ur *echo.UDPRun, tr *echo.TCPRun, notes []result.Message, counts *protocol.LoadCounts, base idle, cfg Config, q *quicPath, ref map[string]tcpUpload) {
 	var lagTicks, lagOver, slipped, slipSent uint64
 	var cpuMax float64
+	// Not one QUIC handshake while STAMP to the same node got answers.
+	blocked := q != nil && q.handshakes.Load() == 0 && ur != nil && len(ur.Stream.Arrivals) > 0
+	v := validity{node: counts, cpuMax: cfg.cpuMax, quicBlocked: blocked, quic: q != nil, tcp: ref}
 	for _, p := range phases {
 		pre := p.spec.name + "."
 		lagTicks += p.lagTicks
@@ -109,8 +199,11 @@ func finish(c *result.Check, phases []phaseResult, ur *echo.UDPRun, tr *echo.TCP
 				continue
 			}
 			m := result.Mbps(id, p.dirs[i].finalBPS)
-			m.AtLeast = p.lowerBound(i)
+			m.AtLeast = bounded(p, i, v)
 			c.Metrics = append(c.Metrics, m)
+			if d := p.dirs[i]; !d.down && d.sentKnown {
+				c.Metrics = append(c.Metrics, result.Ratio(lossID(id), d.resent, d.sent))
+			}
 		}
 		if !p.ran {
 			continue
@@ -193,9 +286,8 @@ func finish(c *result.Check, phases []phaseResult, ur *echo.UDPRun, tr *echo.TCP
 	}
 	c.NotProven = append(c.NotProven, msg("load.not_proven.bottleneck_side", nil), msg("load.not_proven.host_traffic", nil))
 	c.NotProven = append(c.NotProven, notes...)
-	// Not one QUIC handshake while STAMP to the same node got answers.
-	blocked := q != nil && q.handshakes.Load() == 0 && ur != nil && len(ur.Stream.Arrivals) > 0
-	evaluate(c, phases, validity{slipped: slipped, slipSent: slipSent, node: counts, cpuMax: cfg.cpuMax, quicBlocked: blocked})
+	v.slipped, v.slipSent = slipped, slipSent
+	evaluate(c, phases, v)
 }
 
 // validity is what the status rules need beyond the phases themselves.
@@ -204,7 +296,12 @@ type validity struct {
 	node              *protocol.LoadCounts // nil when the session end went unanswered
 	cpuMax            float64              // busy share of the available CPU at which this host counts as full
 	quicBlocked       bool                 // no QUIC handshake completed while UDP to the node got through
+	quic              bool                 // the check is quic-load
+	tcp               map[string]tcpUpload // quic-load: tcp-load's upload directions, by phase
 }
+
+// nodeBehind reports whether the node fell behind during the session.
+func (v validity) nodeBehind() bool { return v.node != nil && lagging(v.node.LagOver, v.node.LagTicks) }
 
 // evaluate applies the tcp-load and quic-load status rules in order (method
 // documents, "Status rules"); TestStatusRules mirrors those tables.
@@ -237,21 +334,15 @@ func evaluate(c *result.Check, phases []phaseResult, v validity) {
 		if !p.ran {
 			continue
 		}
-		if lagging(p.lagOver, p.lagTicks) {
-			invalid = append(invalid, msg("load.warning.host_lag", map[string]any{"phase": p.spec.name, "count": p.lagOver, "ticks": p.lagTicks}, "lag.over_10ms"))
-		}
-		if p.cpuKnown && p.cpuBusy >= v.cpuMax {
-			invalid = append(invalid, msg("load.warning.host_cpu", map[string]any{"phase": p.spec.name, "percent": math.Round(p.cpuBusy * 100)}, "cpu.busy_max"))
-		}
 		if p.capped && p.anyLowerBound() {
 			invalid = append(invalid, msg("load.warning.grant_connections", map[string]any{"phase": p.spec.name, "connections": p.conns}, p.spec.name+".connections"))
 		}
+		if p.cpuKnown && p.cpuBusy >= v.cpuMax {
+			c.NotProven = append(c.NotProven, msg("load.not_proven.host_cpu", map[string]any{"phase": p.spec.name, "percent": math.Round(p.cpuBusy * 100)}, "cpu.busy_max"))
+		}
 	}
-	if v.node != nil && lagging(v.node.LagOver, v.node.LagTicks) {
-		invalid = append(invalid, msg("load.warning.node_lag", map[string]any{"count": v.node.LagOver, "ticks": v.node.LagTicks}))
-	}
-	if beyond(v.slipped, v.slipSent) {
-		invalid = append(invalid, msg("baseline.warning.send_slip", map[string]any{"count": v.slipped}, "send_slip.over_10ms"))
+	if v.quic {
+		c.NotProven = append(c.NotProven, msg("quic_load.not_proven.quic_held_download", nil))
 	}
 	if len(invalid) > 0 {
 		c.Status = result.Invalid
@@ -289,5 +380,28 @@ func evaluate(c *result.Check, phases []phaseResult, v validity) {
 		if p.rpm.ok && p.rpm.rpm < poorRPM {
 			warn("load.inference.rpm_poor", map[string]any{"phase": name, "rpm": math.Round(p.rpm.rpm)}, name+".rpm")
 		}
+		if lagging(p.lagOver, p.lagTicks) {
+			warn("load.inference.host_limited", map[string]any{"phase": name, "count": p.lagOver, "ticks": p.lagTicks}, append([]string{"lag.over_10ms"}, goodputIDs(p.spec)...)...)
+		}
+		if !v.quic {
+			continue
+		}
+		for i, id := range goodputIDs(p.spec) {
+			if p.dirs[i].down {
+				continue
+			}
+			switch fires, why, params := quicHeld(p, i, v.tcp); {
+			case fires:
+				warn("quic_load.inference.quic_held", params, id, lossID(id))
+			case why != "":
+				c.NotProven = append(c.NotProven, msg("quic_load.not_proven.quic_held_"+why, map[string]any{"phase": name}))
+			}
+		}
+	}
+	if v.nodeBehind() {
+		warn("load.inference.node_limited", map[string]any{"count": v.node.LagOver, "ticks": v.node.LagTicks})
+	}
+	if beyond(v.slipped, v.slipSent) || slices.ContainsFunc(phases, func(p phaseResult) bool { return p.ran && lagging(p.lagOver, p.lagTicks) }) {
+		warn("load.inference.host_latency", nil, "lag.over_10ms", "send_slip.over_10ms")
 	}
 }

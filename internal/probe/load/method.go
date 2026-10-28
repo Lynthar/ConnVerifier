@@ -42,9 +42,14 @@ func stable(v []float64) bool {
 	return math.Sqrt(sq/mad) < sdt*w[mad-1]
 }
 
-// settledFrom is the first interval behind the mad moving averages that settled a
-// goodput, given n intervals when stable first held.
-func settledFrom(n int) int { return n - 2*mad + 1 }
+// settledFrom is the first interval of the moving average that settled a goodput,
+// given n intervals when stable first held. Earlier intervals behind the other
+// averages that passed may still be the ramp's tail, and would bias the value low.
+func settledFrom(n int) int { return n - mad + 1 }
+
+// coveredFrom is the first interval behind the last mad moving averages, given n
+// intervals.
+func coveredFrom(n int) int { return n - 2*mad + 1 }
 
 // spanGoodput is a settled goodput's phase value in bit/s: the mean of series
 // (counted bytes per interval of id) from interval first to the end, and steady
@@ -61,7 +66,7 @@ func spanGoodput(series []int64, ma []float64, first int, payload float64, id ti
 	}
 	bps, steady = mean(first), stable(ma)
 	if steady && math.Abs(ma[len(ma)-1]-bps) > sdt*bps {
-		bps = mean(settledFrom(len(series)))
+		bps = mean(coveredFrom(len(series)))
 	}
 	return bps, steady
 }

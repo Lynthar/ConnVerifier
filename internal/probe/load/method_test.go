@@ -53,9 +53,9 @@ func spanOf(t *testing.T, mbps ...float64) (float64, bool) {
 	return bps / 1e6, steady
 }
 
-// The phase value is the mean since goodput settled, or over the last seven intervals
-// if it settled again away from that mean. 1% loss and an overflowing queue are two
-// 10 Mbit/s uplinks with a 2 s queue; the fall is an uplink once downloads load it.
+// The phase value is the mean from the moving average that settled goodput (counting the
+// ramp's tail gave 9.58 on the first), or of the last seven intervals if it settled again
+// apart; loss and overflow are 10 Mbit/s uplinks with a 2 s queue, the fall one loaded by downloads.
 func TestSpanGoodput(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
@@ -64,8 +64,9 @@ func TestSpanGoodput(t *testing.T) {
 		steadyAt bool
 	}{
 		{"flat", []float64{10, 10, 10, 10, 10, 10, 10, 10, 10}, 10, 10, true},
-		{"1% loss", []float64{8.39, 8.40, 10.35, 8.78, 8.78, 9.30, 8.92, 9.04, 9.18, 9.04, 8.39, 10.09, 8.65, 8.25, 9.18, 9.83, 9.18, 9.44, 8.13, 10.62}, 9.09, 9.11, true},
-		{"overflowing queue", []float64{8.39, 9.45, 9.04, 9.43, 8.66, 9.31, 8.77, 9.44, 9.56, 9.70, 9.17, 8.65, 9.57, 9.43, 3.41, 0.39, 10.75, 9.69, 6.95, 2.23}, 8.09, 8.11, false},
+		{"the ramp's tail stays out", []float64{2, 5, 7.5, 9, 9.6, 9.8, 9.9, 10, 10, 10, 10, 10}, 9.97, 10, true},
+		{"1% loss", []float64{8.39, 8.40, 10.35, 8.78, 8.78, 9.30, 8.92, 9.04, 9.18, 9.04, 8.39, 10.09, 8.65, 8.25, 9.18, 9.83, 9.18, 9.44, 8.13, 10.62}, 9.12, 9.13, true},
+		{"overflowing queue", []float64{8.39, 9.45, 9.04, 9.43, 8.66, 9.31, 8.77, 9.44, 9.56, 9.70, 9.17, 8.65, 9.57, 9.43, 3.41, 0.39, 10.75, 9.69, 6.95, 2.23}, 7.85, 7.86, false},
 		{"still rising after it settled", []float64{10, 10, 10, 10, 10, 10, 10, 10.3, 10.6, 10.9, 11.2, 11.5, 11.8, 12.1}, 11.19, 11.21, true},
 		{"falling as the other direction loads", []float64{6.0, 7.5, 8.3, 8.5, 8.6, 8.5, 8.4, 8.2, 7.9, 7.6, 7.3, 7.0, 6.8, 6.6, 6.5, 6.4, 6.4, 6.5, 6.4, 6.4}, 6.45, 6.46, true},
 	} {

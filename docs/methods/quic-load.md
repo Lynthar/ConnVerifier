@@ -75,6 +75,11 @@ to drain exactly as between phases.
 - **UDP buffers** (`host.udp_receive_buffer`, `host.udp_send_buffer`): the smallest
   receive and send buffers any of the check's QUIC sockets got after quic-go asked
   for 7 MiB, as the kernel reports them (Linux doubles what was granted).
+- **Sender loss (`sender_loss`),** for a direction this host sends: packets quic-go
+  declared lost over packets sent, summed over its load connections at the end of
+  the phase, on any system. A packet declared lost may still have arrived: QUIC
+  declares one lost once a packet sent three later is acknowledged, or 9/8 of a
+  round trip after a later one was (RFC 9002 §6.1).
 - Confidence, lower bounds, round trips under load, lag, connect failures, failed
   foreign probes and wait are as in `tcp-load`.
 
@@ -84,6 +89,24 @@ As in `tcp-load`. QUIC costs this host roughly twice the CPU per byte that TCP a
 TLS do, so a slow host reaches the lag limit sooner; the limit is the same.
 UDP buffers below what quic-go asks for do not make the result invalid: the result
 adds a note that a fast or long path may have dropped packets on this host.
+
+**Something held QUIC that did not hold TCP** in an upload when, in the same check,
+`tcp-load` measured that phase's upload too, and over the same path
+
+- QUIC's upload goodput is below 0.7 of TCP's, and
+- QUIC's sender loss is below TCP's, or more than 5 times it.
+
+A path's capacity holds QUIC back as it does TCP, and a flow it holds meets its losses.
+Behind deep, shallow and flow-queued queues, a policer and random loss, no upload
+met both conditions. When both are met, what held QUIC is this host's QUIC sending
+— its CPU, its congestion control, or a network adapter that reorders packets
+across its queues, which makes QUIC declare packets lost that arrived — or the path
+treating UDP apart, such as a rate or burst limit for UDP alone; which one is not
+determined. That upload's goodput is a lower bound. Losses 1 to 5 times apart are
+not judged: the path may have changed between the two loads, or QUIC's congestion
+control may fare worse on the same losses.
+The rule is not applied without sender loss on both sides, when TCP resent nothing,
+or to downloads, whose sender is the node; each adds a note.
 
 ## 6. Influences
 
@@ -121,20 +144,22 @@ is the QUIC payload ceiling of section 4.
 
 | # | Injected | Pass condition | Last result |
 |---|---|---|---|
-| L1 | 20 ms round trip, 20 Mbit/s each way, 40 ms queue | In each of 10 runs: download and upload goodput in [0.93 C, 1.005 C], settled; neither direction of both together above its C | 10/10: download 96.6–96.8% of C, upload 94.6–95.0% |
-| L2 | As L1 at 100 Mbit/s | As L1; and never this host or the node reported as the limit | 10/10: download 98.1–98.5%, upload 97.3–97.6% |
-| L3 | 100 Mbit/s down, 10 Mbit/s up | As L1, 5 runs | 5/5: download 98.3–98.5%, upload 93.7–94.0% |
-| L4 | 20 Mbit/s, 200 ms FIFO queue | Independent UDP and TCP p50 under load in [170, 240] ms; RPM below 300 | 3/3: UDP 200–211 ms, TCP 202–226 ms; 279–287 RPM |
-| L5 | As L4 with `fq_codel` in the queue | UDP p50 under load at most 15 ms above idle; self and foreign probes recorded, no bound (section 6) | 3/3: UDP at most idle; self 45–51 ms, foreign 44–45 ms |
-| L6 | 1 Gbit/s; this host limited to a tenth of a CPU | `INVALID` for this host, 10 of 10 runs | 10/10; 44–81% of wake-ups late per phase |
+| L1 | 20 ms round trip, 20 Mbit/s each way, 40 ms queue | In each of 10 runs: download and upload goodput in [0.93 C, 1.005 C], settled; neither direction of both together above its C | 10/10: download 96.4–97.0% of C, upload 93.8–95.3% |
+| L2 | As L1 at 100 Mbit/s | As L1; and never this host or the node reported as the limit | 10/10: download 98.5–99.1%, upload 97.7–98.8% |
+| L3 | 100 Mbit/s down, 10 Mbit/s up | As L1, 5 runs | 5/5: download 98.9–99.1%, upload 93.6–94.3% |
+| L4 | 20 Mbit/s, 200 ms FIFO queue | Independent UDP and TCP p50 under load in [170, 240] ms; RPM below 300 | 3/3: UDP 202–214 ms, TCP 195–207 ms; 278–283 RPM |
+| L5 | As L4 with `fq_codel` in the queue | UDP p50 under load at most 15 ms above idle; self and foreign probes recorded, no bound (section 6) | 3/3: UDP at most idle; self 46–53 ms, foreign 44–45 ms |
+| L6 | 1 Gbit/s; this host limited to a tenth of a CPU | `WARN` with this host the possible limit and every goodput a lower bound, 10 of 10 runs | 10/10; 32–95% of wake-ups late per phase |
 | L8 | 100 Mbit/s; the node grants 50 MB | Every phase a lower bound; the node moves at most 50 MB | passed |
-| L9 | 100 Mbit/s down; 10 Mbit/s up with a 2 s queue and 1% loss | In each of 3 runs: no phase aborted; upload goodput reported and at most C | 3/3: upload 8.85–9.10 Mbit/s (C 9.50) |
-| L10 | As L9 without the loss | In each of 3 runs: upload goodput reported and at most C; below 0.93 C, not of `high` confidence | 3/3: upload 8.93–8.94 Mbit/s (C 9.50), `high` |
+| L9 | 100 Mbit/s down; 10 Mbit/s up with a 2 s queue and 1% loss | In each of 3 runs: no phase aborted; upload goodput reported and at most C | 3/3: upload 8.79–8.88 Mbit/s (C 9.50) |
+| L10 | As L9 without the loss | In each of 3 runs: upload goodput reported and at most C; below 0.93 C, not of `high` confidence | 3/3: upload 8.91–8.96 Mbit/s (C 9.50), `high` |
 | B1 | The node's QUIC port dropped, STAMP and TCP open | `ERROR` with the inference that QUIC was blocked; `tcp-load` unaffected | passed; `tcp-load` `WARN` |
-| B2 | Unprivileged client, Linux default buffers, 100 ms round trip | Buffers reported below 7 MiB with the note; nothing from quic-go on stderr | passed: 416 KiB, the note, a clean stderr; `WARN` for responsiveness alone |
-| C1 | As L2 | QUIC/TCP goodput ratio recorded, no bound: what the two reach without any rate limit | download 0.993–1.001, upload 0.996–0.999 |
+| B2 | Unprivileged client, Linux default buffers, 100 ms round trip | Buffers reported below 7 MiB with the note; nothing from quic-go on stderr | passed: 416 KiB, the note, a clean stderr; `PASS` |
+| C1 | As L2 | QUIC/TCP goodput ratio recorded, no bound: what the two reach without any rate limit | download 0.986–0.992, upload 0.975–0.997 |
+| E1 | 300 Mbit/s each way, 20 ms round trip, 200 ms queue; this host limited to a tenth of a CPU | In each of 3 runs: `tcp-load`'s upload at least 0.93 of its C; `quic-load` infers something held QUIC and not TCP, its upload a lower bound | 3/3: `tcp-load` upload 98.3–99.5% of C; QUIC upload ≥ 39–54 Mbit/s, sender loss 0.02–0.07% against TCP's 0.23–0.28% |
+| E2 | 300 Mbit/s each way, 20 ms round trip: a policer with 5 ms of burst; a token bucket with 2 ms of queue | In none of 3 runs each does `quic-load` infer something held QUIC and not TCP | 6/6 none; sender loss QUIC 1.2–1.7% and TCP 1.4–2.4% behind the policer, QUIC 0.5–0.8% and TCP 0.6–3.5% behind the token bucket |
 
-Last run: 2026-10-12, Linux 6.8 (Ubuntu 24.04, arm64 virtual machine), Go
+Last run: 2026-10-29, Linux 6.8 (Ubuntu 24.04, arm64 virtual machine), Go
 1.27.1, quic-go v0.63.0. In-memory tests check the same plumbing: goodput behind a
 shared 32 Mbit/s token bucket settles at 96% of it, the share of the datagrams'
 bytes that is body.
@@ -150,8 +175,10 @@ Before the run, as in `tcp-load` (0a–0e), and:
 After the run, as in `tcp-load`. On rule 1, when not one QUIC handshake completed
 while the independent UDP probe to the same node got replies, the result adds the
 inference that something on the path may block QUIC, or that the node's QUIC port
-is not open. Buffers below what quic-go asks for add a note without changing the
-status.
+is not open. Rule 3 also holds when something held a QUIC upload that did not hold
+TCP (section 5).
+Buffers below what quic-go asks for, an upload the rule could not judge, and the
+download it does not judge add a note without changing the status.
 
 ## Method version changes
 
@@ -162,3 +189,4 @@ definition above changes. Each result records the quic-go version (`quic_go`).
 | Version | Change |
 |---|---|
 | 1 | First version. |
+| 2 | As `tcp-load` version 2, and: an upload that something held apart from TCP (section 5) is a lower bound with `WARN`; sender loss is reported. |

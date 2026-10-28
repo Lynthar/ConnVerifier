@@ -42,13 +42,13 @@ func syntheticPhases() []phaseResult {
 	down.rpm = responsiveness{rpm: 812.4, foreign: 1100.2, loaded: 524.6, samples: 160, ok: true}
 	down.self, down.foreign = durations(110*time.Millisecond, 3*time.Millisecond, 80), durations(65*time.Millisecond, 2*time.Millisecond, 80)
 	up.start, up.settledAt, up.end = at(14), at(21), at(26)
-	up.dirs = []*direction{{finalBPS: 19.876e6}}
+	up.dirs = []*direction{{finalBPS: 19.876e6, sent: 2_100_000, resent: 105_000, sentKnown: true}}
 	up.conns, up.bytes = 9, 29_876_543
 	up.rpm = responsiveness{rpm: 431.7, foreign: 610.3, loaded: 253.1, samples: 200, ok: true}
 	up.self, up.foreign = durations(230*time.Millisecond, 5*time.Millisecond, 100), durations(95*time.Millisecond, 3*time.Millisecond, 100)
 	both.start, both.settledAt, both.end = at(28), at(37), at(48)
 	both.stopped, both.rpmConf = stopTime, result.Medium
-	both.dirs = []*direction{{down: true, finalBPS: 71.002e6}, {finalBPS: 18.204e6}}
+	both.dirs = []*direction{{down: true, finalBPS: 71.002e6}, {finalBPS: 18.204e6, sent: 2_900_000, resent: 8_700, sentKnown: true}}
 	both.conns, both.bytes = 26, 245_678_901
 	both.rpm = responsiveness{rpm: 247.9, foreign: 330.5, loaded: 165.3, samples: 220, ok: true}
 	both.self, both.foreign = durations(330*time.Millisecond, 8*time.Millisecond, 110), durations(160*time.Millisecond, 4*time.Millisecond, 110)
@@ -82,7 +82,8 @@ func fillStream(s *echo.Stream, p []phaseResult) {
 }
 
 // goldenCheck is a made-up tcp-load, or with quic a quic-load whose sockets got
-// Linux's default UDP buffers.
+// Linux's default UDP buffers, compared with a tcp-load that moved twice its upload
+// at a twentieth of its loss and did not measure both directions.
 func goldenCheck(quic bool) result.Check {
 	cfg := Config{interval: time.Second, phaseTime: 20 * time.Second, phaseMB: 500, rate: 50, slipLimit: echo.DefaultSlipLimit, cpuMax: 0.875}
 	ph := syntheticPhases()
@@ -94,7 +95,7 @@ func goldenCheck(quic bool) result.Check {
 		id, proto, params, addr = "quic-load", "quic", cfg.quicParams("v0.0.0-golden"), "192.0.2.10:7444"
 	}
 	c := result.Check{
-		ID: id, MethodVersion: 1, ElapsedMs: 52_400,
+		ID: id, MethodVersion: 2, ElapsedMs: 52_400,
 		Path:    result.Path{Node: addr, Family: "ipv4", Protocol: proto},
 		Params:  params,
 		Metrics: []result.Metric{},
@@ -110,12 +111,14 @@ func goldenCheck(quic bool) result.Check {
 	base := idle{udpP50: 31.2, udpP95: 35.4, tcpP50: 31.5, tcpP95: 36.1}
 	var q *quicPath
 	var notes []result.Message
+	var ref map[string]tcpUpload
 	if quic {
 		q = &quicPath{recv: 425_984, send: 425_984}
 		q.handshakes.Store(48)
 		notes = bufferFacts(&c, q)
+		ref = map[string]tcpUpload{"upload": {bps: 40e6, loss: 0.25, lossKnown: true}}
 	}
-	finish(&c, ph, ur, tr, notes, &protocol.LoadCounts{LagTicks: 5200, LagOver: 3}, base, cfg, q)
+	finish(&c, ph, ur, tr, notes, &protocol.LoadCounts{LagTicks: 5200, LagOver: 3}, base, cfg, q, ref)
 	return c
 }
 

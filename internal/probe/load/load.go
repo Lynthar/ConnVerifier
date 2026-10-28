@@ -163,20 +163,21 @@ func QUICGoVersion() string {
 }
 
 // Run opens a load session on the node, runs the three phases over TCP and
-// returns the tcp-load result. baseline holds the idle checks run just before,
-// whose round trips the loaded ones are compared with. It returns an error only
-// when cfg is invalid.
-func Run(ctx context.Context, cfg Config, version string, baseline []result.Check) (result.Check, error) {
-	return run(ctx, cfg, version, baseline, false)
+// returns the tcp-load result. earlier holds the checks run before it: the idle
+// ones, whose round trips the loaded ones are compared with. It returns an error
+// only when cfg is invalid.
+func Run(ctx context.Context, cfg Config, version string, earlier []result.Check) (result.Check, error) {
+	return run(ctx, cfg, version, earlier, false)
 }
 
 // RunQUIC is Run over HTTP/3: the quic-load result. It follows a tcp-load, so it
-// lets that load's queue drain before its first phase.
-func RunQUIC(ctx context.Context, cfg Config, version string, baseline []result.Check) (result.Check, error) {
-	return run(ctx, cfg, version, baseline, true)
+// lets that load's queue drain before its first phase, and judges its uploads
+// against that tcp-load's when earlier holds it.
+func RunQUIC(ctx context.Context, cfg Config, version string, earlier []result.Check) (result.Check, error) {
+	return run(ctx, cfg, version, earlier, true)
 }
 
-func run(ctx context.Context, cfg Config, version string, baseline []result.Check, quic bool) (c result.Check, err error) {
+func run(ctx context.Context, cfg Config, version string, earlier []result.Check, quic bool) (c result.Check, err error) {
 	if err := cfg.Validate(); err != nil {
 		return result.Check{}, fmt.Errorf("invalid configuration: %w", err)
 	}
@@ -206,7 +207,7 @@ func run(ctx context.Context, cfg Config, version string, baseline []result.Chec
 	start := time.Now()
 	c = result.Check{
 		ID:            id,
-		MethodVersion: 1,
+		MethodVersion: 2,
 		Path:          result.Path{Node: inv.Addrs[0], Family: nodeclient.Family(inv.Addrs[0]), Protocol: proto},
 		Params:        params,
 		Metrics:       []result.Metric{},
@@ -278,7 +279,7 @@ func run(ctx context.Context, cfg Config, version string, baseline []result.Chec
 	phaseBytes := min(cfg.phaseMB*1e6, (lg.Bytes-allowance)/int64(len(phases)))
 	maxConns := max(lg.Connections-probeHeadroom, 2)
 	probes := startProbes(ctx, cfg, sess, inv, dial, dialUDP)
-	base := idleOf(baseline)
+	base := idleOf(earlier)
 	lag := netenv.StartLag(lagPeriod, cfg.slipLimit)
 	var results []phaseResult
 	for i, spec := range phases {
@@ -317,7 +318,11 @@ func run(ctx context.Context, cfg Config, version string, baseline []result.Chec
 	if t.quic != nil {
 		probes.notes = append(probes.notes, bufferFacts(&c, t.quic)...)
 	}
-	finish(&c, results, ur, tr, probes.notes, counts, base, cfg, t.quic)
+	var ref map[string]tcpUpload
+	if quic {
+		ref = tcpUploads(earlier)
+	}
+	finish(&c, results, ur, tr, probes.notes, counts, base, cfg, t.quic, ref)
 	return c, nil
 }
 

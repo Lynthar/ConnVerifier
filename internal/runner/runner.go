@@ -44,15 +44,15 @@ func Confirm(in io.Reader, out io.Writer, interactive, yes bool, notice, prompt 
 // Check runs the check command: the idle baseline, then the load over TCP, then
 // over QUIC. None overlaps another — a path under load is not idle, and two loads
 // share one bottleneck — and each load compares its round trips with the
-// baseline's. It returns an error only when a configuration is invalid.
+// baseline's, quic-load its uploads also with tcp-load's. It returns an error
+// only when a configuration is invalid.
 func Check(ctx context.Context, base baseline.Config, ld load.Config, version string) ([]result.Check, error) {
 	checks, err := baseline.Run(ctx, base, version)
 	if err != nil {
 		return nil, err
 	}
-	idle := checks
 	for _, run := range []func(context.Context, load.Config, string, []result.Check) (result.Check, error){load.Run, load.RunQUIC} {
-		c, err := run(ctx, ld, version, idle)
+		c, err := run(ctx, ld, version, checks)
 		if err != nil {
 			return nil, err
 		}

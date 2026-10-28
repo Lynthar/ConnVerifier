@@ -211,7 +211,12 @@ type direction struct {
 	carried   atomic.Int64 // of those, how many did
 	started   time.Time
 	finalBPS  float64
-	wires     []*wireConn // guarded by phaseRun.mu
+	wires     []*wireConn  // guarded by phaseRun.mu
+	quics     []*quic.Conn // guarded by phaseRun.mu: the HTTP/3 connections that opened
+	// What this host's connections sent and sent again, for an upload once the
+	// phase ends; sentKnown is false when no connection could tell.
+	sent, resent uint64
+	sentKnown    bool
 }
 
 // established is how many of d's connections carried, or may still carry, their
@@ -417,6 +422,16 @@ func (p *phaseRun) open(d *direction) {
 // kept ahead of its socket, so the phase's end closes the connection first.
 func (p *phaseRun) openQUIC(d *direction) {
 	tr := p.t.h3(p.keep, nil)
+	dial := tr.Dial
+	tr.Dial = func(ctx context.Context, addr string, tc *tls.Config, qc *quic.Config) (*quic.Conn, error) {
+		c, err := dial(ctx, addr, tc, qc)
+		if err == nil {
+			p.mu.Lock()
+			d.quics = append(d.quics, c)
+			p.mu.Unlock()
+		}
+		return c, err
+	}
 	p.keep(tr)
 	p.start(tr, d, func() { p.markReady(tr) })
 }
@@ -822,6 +837,7 @@ loop:
 	cancel()
 	p.conns.Wait()
 	p.probes.Wait()
+	p.countSent()
 	p.closeOpened()
 
 	r.stopped, r.err = p.stopWhy, p.stopErr
@@ -871,6 +887,27 @@ loop:
 		r.self = append(r.self, x.http)
 	}
 	return r
+}
+
+// countSent reads, before the phase closes them, what the connections of each
+// upload sent and sent again: QUIC packets declared lost, TCP segments resent.
+func (p *phaseRun) countSent() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, d := range p.dirs {
+		if d.down {
+			continue
+		}
+		for _, wc := range d.wires {
+			if sent, resent, ok := netx.TCPSent(wc.Conn); ok {
+				d.sent, d.resent, d.sentKnown = d.sent+sent, d.resent+resent, true
+			}
+		}
+		for _, c := range d.quics {
+			st := c.ConnectionStats()
+			d.sent, d.resent, d.sentKnown = d.sent+st.PacketsSent, d.resent+st.PacketsLost, true
+		}
+	}
 }
 
 // closeOpened closes what the phase's load opened, without holding p.mu: closing
