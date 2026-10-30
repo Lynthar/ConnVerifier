@@ -14,7 +14,7 @@
   "checks": [
     {
       "id": "tcp-load",
-      "method_version": 2,
+      "method_version": 3,
       "status": "WARN",
       "path": {
         "node": "192.0.2.10:7443",
@@ -177,8 +177,6 @@
           "id": "upload.sender_loss",
           "unit": "%",
           "value": 5,
-          "low": 4.9706,
-          "high": 5.0296,
           "samples": 2100000
         },
         {
@@ -328,8 +326,6 @@
           "id": "bidirectional.sender_loss.upload",
           "unit": "%",
           "value": 0.3,
-          "low": 0.2938,
-          "high": 0.3064,
           "samples": 2900000
         },
         {
@@ -582,7 +578,7 @@
     },
     {
       "id": "quic-load",
-      "method_version": 2,
+      "method_version": 3,
       "status": "WARN",
       "path": {
         "node": "192.0.2.10:7444",
@@ -757,8 +753,6 @@
           "id": "upload.sender_loss",
           "unit": "%",
           "value": 5,
-          "low": 4.9706,
-          "high": 5.0296,
           "samples": 2100000
         },
         {
@@ -908,8 +902,6 @@
           "id": "bidirectional.sender_loss.upload",
           "unit": "%",
           "value": 0.3,
-          "low": 0.2938,
-          "high": 0.3064,
           "samples": 2900000
         },
         {

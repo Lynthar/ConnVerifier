@@ -2,6 +2,7 @@ package load
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"flag"
 	"os"
@@ -90,12 +91,12 @@ func goldenCheck(quic bool) result.Check {
 	ur, tr := &echo.UDPRun{End: at(60)}, &echo.TCPRun{End: at(60)}
 	fillStream(&ur.Stream, ph)
 	fillStream(&tr.Stream, ph)
-	id, proto, params, addr := "tcp-load", "tcp", cfg.params(), "192.0.2.10:7443"
+	id, proto, params, addr := TCPID, "tcp", cfg.params(), "192.0.2.10:7443"
 	if quic {
-		id, proto, params, addr = "quic-load", "quic", cfg.quicParams("v0.0.0-golden"), "192.0.2.10:7444"
+		id, proto, params, addr = QUICID, "quic", cfg.quicParams("v0.0.0-golden"), "192.0.2.10:7444"
 	}
 	c := result.Check{
-		ID: id, MethodVersion: 2, ElapsedMs: 52_400,
+		ID: id, MethodVersion: MethodVersion, ElapsedMs: 52_400,
 		Path:    result.Path{Node: addr, Family: "ipv4", Protocol: proto},
 		Params:  params,
 		Metrics: []result.Metric{},
@@ -164,6 +165,32 @@ func TestResultGolden(t *testing.T) {
 	}
 }
 
+// The loads find their idle round trips in the baseline's result. The baseline
+// writes its golden from its own code, so a metric it renames fails here.
+func TestIdleFromBaselineResult(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "baseline", "testdata", "run.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var run result.Run
+	if err := json.Unmarshal(b, &run); err != nil {
+		t.Fatal(err)
+	}
+	if i := idleOf(run.Checks); i.udpP50 <= 0 || i.udpP95 <= 0 || i.tcpP50 <= 0 || i.tcpP95 <= 0 {
+		t.Fatalf("idleOf(baseline golden) = %+v, want all four round trips", i)
+	}
+}
+
+// quic-load finds tcp-load's uploads, with their sender loss, in tcp-load's result.
+func TestTCPUploadsFromTCPLoad(t *testing.T) {
+	ref := tcpUploads([]result.Check{goldenCheck(false)})
+	for _, phase := range []string{"upload", "bidirectional"} {
+		if u, ok := ref[phase]; !ok || u.bps <= 0 || !u.lossKnown {
+			t.Errorf("tcpUploads(golden tcp-load)[%q] = %+v, %v; want goodput and sender loss", phase, u, ok)
+		}
+	}
+}
+
 // Every message any rule can produce resolves in every catalog; a missing key
 // renders as itself and would show up here.
 func TestTextHasNoRawKeys(t *testing.T) {
@@ -214,7 +241,7 @@ func TestTextHasNoRawKeys(t *testing.T) {
 	}
 	add(func(c *result.Check) {
 		c.NotProven = []result.Message{{Key: "load.not_proven.no_tcp_probe", Params: map[string]any{"error": "x"}}}
-		c.Warnings = []result.Message{Config{phaseMB: 500}.Notice()}
+		c.Warnings = []result.Message{Config{phaseMB: 500}.Notice(2)}
 	})
 	run := result.Run{Checks: checks}
 	rawKey := regexp.MustCompile(`\b(load|quic_load|baseline|scope|stop|level|metric|param|label|section|status|check|line|value|node)\.[A-Za-z_]`)

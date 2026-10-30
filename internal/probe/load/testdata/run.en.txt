@@ -1,6 +1,6 @@
 TCP under load: goodput and responsiveness: attention (WARN)
 Node: 192.0.2.10:7443 · IPv4 · TCP
-Method version: 2
+Method version: 3
 Elapsed: 52.4 s
 Parameters
   Interval for adding connections and testing stability: 1 s
@@ -47,7 +47,7 @@ Observed
   Download · TCP round trip p50, above idle: 138 ms (199 samples)
   Download · TCP round trip p95, above idle: 154 ms (199 samples)
   Upload · Goodput: 19.9 Mbit/s
-  Upload · Sender loss (share declared lost or resent): 5% (95% interval 4.97–5.03%, samples: 2100000)
+  Upload · Sender loss (share declared lost or resent): 5% (2100000 samples)
   Upload · Goodput confidence: high
   Upload · Load connections: 9
   Upload · Load connections that did not open: 0
@@ -73,7 +73,7 @@ Observed
   Upload · TCP round trip p95, above idle: 154 ms (248 samples)
   Both directions · Goodput, download: 71 Mbit/s
   Both directions · Goodput, upload: 18.2 Mbit/s
-  Both directions · Sender loss, upload: 0.3% (95% interval 0.29–0.31%, samples: 2900000)
+  Both directions · Sender loss, upload: 0.3% (2900000 samples)
   Both directions · Goodput confidence: high
   Both directions · Load connections: 26
   Both directions · Load connections that did not open: 2
@@ -113,7 +113,7 @@ Not proven
 
 QUIC under load: goodput and responsiveness: attention (WARN)
 Node: 192.0.2.10:7444 · IPv4 · QUIC
-Method version: 2
+Method version: 3
 Elapsed: 52.4 s
 Parameters
   Interval for adding connections and testing stability: 1 s
@@ -163,7 +163,7 @@ Observed
   Download · TCP round trip p50, above idle: 138 ms (199 samples)
   Download · TCP round trip p95, above idle: 154 ms (199 samples)
   Upload · Goodput: ≥ 19.9 Mbit/s
-  Upload · Sender loss (share declared lost or resent): 5% (95% interval 4.97–5.03%, samples: 2100000)
+  Upload · Sender loss (share declared lost or resent): 5% (2100000 samples)
   Upload · Goodput confidence: high
   Upload · Load connections: 9
   Upload · Load connections that did not open: 0
@@ -189,7 +189,7 @@ Observed
   Upload · TCP round trip p95, above idle: 154 ms (248 samples)
   Both directions · Goodput, download: 71 Mbit/s
   Both directions · Goodput, upload: 18.2 Mbit/s
-  Both directions · Sender loss, upload: 0.3% (95% interval 0.29–0.31%, samples: 2900000)
+  Both directions · Sender loss, upload: 0.3% (2900000 samples)
   Both directions · Goodput confidence: high
   Both directions · Load connections: 26
   Both directions · Load connections that did not open: 2

@@ -74,7 +74,8 @@ func (c *Catalog) Text(key string, params map[string]any) string {
 }
 
 // Normalize maps a language tag or POSIX locale ("zh_CN.UTF-8", "en-US", "zh") to a
-// supported language, reporting false when it names none.
+// supported language, reporting false when it names none. The C and POSIX locales
+// are English, as their messages are.
 func Normalize(tag string) (string, bool) {
 	base := strings.ToLower(tag)
 	if i := strings.IndexAny(base, "_-.@"); i >= 0 {
@@ -83,14 +84,14 @@ func Normalize(tag string) (string, bool) {
 	switch base {
 	case "zh":
 		return "zh-CN", true
-	case "en":
+	case "en", "c", "posix":
 		return "en", true
 	}
 	return "", false
 }
 
 // Detect picks the language from LC_ALL, LC_MESSAGES and LANG, first non-empty
-// wins as in POSIX; unset, "C", "POSIX" or unsupported values give Default.
+// wins as in POSIX; unset or unsupported values give Default.
 func Detect(getenv func(string) string) string {
 	for _, name := range []string{"LC_ALL", "LC_MESSAGES", "LANG"} {
 		if v := getenv(name); v != "" {

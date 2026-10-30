@@ -1,6 +1,6 @@
 # `tcp-load` — goodput and round trips with the path loaded
 
-Method version **1**.
+Method version **3**.
 
 ## 1. Question
 
@@ -116,8 +116,8 @@ time, in a session of its own.
 - **Sender loss (`sender_loss`),** for a direction this host sends: segments sent
   again over segments sent, summed over its load connections at the end of the
   phase as the kernel counts them — data segments from `TCP_INFO` on Linux, packets
-  from `TCP_CONNECTION_INFO` on macOS; not reported elsewhere. With a 95% Wilson
-  interval over the segments sent.
+  from `TCP_CONNECTION_INFO` on macOS; not reported elsewhere. It has no
+  interval: segments are resent in bursts, not as independent trials.
 - **Round trips under load:** independent probes sent from the moment goodput
   settled to the end of the phase; if it never settled, from four intervals before
   the end. Defined exactly as in `udp-baseline` and `tcp-baseline`; `…increase` is
@@ -257,3 +257,4 @@ rules change.
 |---|---|
 | 1 | First version. |
 | 2 | This host or the node falling behind, and late probes, report goodput as a lower bound and qualify round trips instead of making the result `INVALID`; CPU use only adds a note. A settled goodput's value starts at the moving average that settled it. Sender loss (`sender_loss`) is reported. |
+| 3 | Sender loss is reported without an interval. |

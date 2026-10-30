@@ -46,6 +46,12 @@ func writeCheck(b *strings.Builder, c result.Check, cat *i18n.Catalog) {
 		"status": cat.Text("status."+string(c.Status), nil),
 		"code":   string(c.Status),
 	}) + "\n")
+	if c.Status == result.Skip { // it did not run: nothing but why
+		for _, m := range c.Warnings {
+			b.WriteString("  - " + Message(cat, m) + "\n")
+		}
+		return
+	}
 	field("", cat.Text("label.node", nil), pathText(c.Path))
 	field("", cat.Text("label.method_version", nil), strconv.Itoa(c.MethodVersion))
 	field("", cat.Text("label.elapsed", nil), formatMs(float64(c.ElapsedMs)))

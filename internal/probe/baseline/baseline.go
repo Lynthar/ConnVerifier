@@ -21,6 +21,16 @@ import (
 	"github.com/Lynthar/ConnVerifier/internal/result"
 )
 
+// Check IDs; the load checks read the idle round trips by them.
+const (
+	UDPID = "udp-baseline"
+	TCPID = "tcp-baseline"
+)
+
+// MethodVersion is both checks' method version: it goes up with any change to
+// their definitions, estimators, validity conditions or status rules.
+const MethodVersion = 1
+
 const (
 	defaultTmax   = 3 * time.Second // RFC 6673 §3.2 waiting time
 	sessionMargin = 10 * time.Second
@@ -116,8 +126,8 @@ func Run(ctx context.Context, cfg Config, version string) ([]result.Check, error
 	}
 
 	start := time.Now()
-	udp := newCheck("udp-baseline", "udp", cfg, inv.Addrs[0], inv.Label, udpPacketLen)
-	tcp := newCheck("tcp-baseline", "tcp", cfg, inv.Addrs[0], inv.Label, tcpPacketLen)
+	udp := newCheck(UDPID, "udp", cfg, inv.Addrs[0], inv.Label, udpPacketLen)
+	tcp := newCheck(TCPID, "tcp", cfg, inv.Addrs[0], inv.Label, tcpPacketLen)
 	done := func() []result.Check {
 		el := time.Since(start).Milliseconds()
 		udp.ElapsedMs, tcp.ElapsedMs = el, el
@@ -215,7 +225,7 @@ func Run(ctx context.Context, cfg Config, version string) ([]result.Check, error
 func newCheck(id, proto string, cfg Config, addr, label string, packetLen int) result.Check {
 	return result.Check{
 		ID:            id,
-		MethodVersion: 1,
+		MethodVersion: MethodVersion,
 		Path:          result.Path{Node: addr, Family: nodeclient.Family(addr), Protocol: proto},
 		Params:        cfg.params(packetLen),
 		Metrics:       []result.Metric{},

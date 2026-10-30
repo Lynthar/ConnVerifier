@@ -189,14 +189,25 @@ func Level(id string, level int) Metric {
 }
 
 // Ratio returns k of n as a percentage with its 95% Wilson interval; with n = 0
-// it is insufficient.
+// it is insufficient. The n must be independent trials, or the interval is false.
 func Ratio(id string, k, n uint64) Metric {
+	m := Share(id, k, n)
+	if n > 0 {
+		lo, hi := stats.Wilson(k, n)
+		l, h := round4(100*lo), round4(100*hi)
+		m.Low, m.High = &l, &h
+	}
+	return m
+}
+
+// Share returns k of n as a percentage without an interval, for events that come
+// in bursts; with n = 0 it is insufficient.
+func Share(id string, k, n uint64) Metric {
 	if n == 0 {
 		return Metric{ID: id, Unit: UnitPercent, Insufficient: true}
 	}
-	lo, hi := stats.Wilson(k, n)
-	v, l, h := round4(100*float64(k)/float64(n)), round4(100*lo), round4(100*hi)
-	return Metric{ID: id, Unit: UnitPercent, Value: &v, Low: &l, High: &h, Samples: n}
+	v := round4(100 * float64(k) / float64(n))
+	return Metric{ID: id, Unit: UnitPercent, Value: &v, Samples: n}
 }
 
 // round4 keeps four decimals. CPUs that fuse multiply-add compute the interval a

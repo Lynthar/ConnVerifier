@@ -36,6 +36,7 @@
   "invite.list_row": "{label}  created {created}  sessions ≤{sessions}  connections ≤{connections}  new ≤{rate}/s  duration ≤{duration}  idle ≤{idle}  load ≤{load_mb} MB per session, ≤{load_day_mb} MB per day",
 
   "check.tcp-capacity.title": "TCP long-lived connections",
+  "check.not_selected": "Not run: -only does not list this check.",
 
   "tcp_capacity.confirm.notice": "About to open and hold {connections} TCP connections to node \"{node}\" ({addr}), at most {rate} new ones per second, for {duration_ms}. This fills connection tables in your router and your provider's NAT; other devices on the same network may briefly lose connectivity.",
   "tcp_capacity.confirm.notice_until_stopped": "About to open and hold {connections} TCP connections to node \"{node}\" ({addr}), at most {rate} new ones per second, until you stop it or the node's session ends. This fills connection tables in your router and your provider's NAT; other devices on the same network may briefly lose connectivity.",

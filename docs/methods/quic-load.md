@@ -1,6 +1,6 @@
 # `quic-load` — goodput and round trips with the path loaded over QUIC
 
-Method version **1**.
+Method version **3**.
 
 This is the [`tcp-load`](tcp-load.md) method with the load and the responsiveness
 probes carried by HTTP/3 over QUIC instead of HTTP/2 over TCP. Only what differs
@@ -190,3 +190,4 @@ definition above changes. Each result records the quic-go version (`quic_go`).
 |---|---|
 | 1 | First version. |
 | 2 | As `tcp-load` version 2, and: an upload that something held apart from TCP (section 5) is a lower bound with `WARN`; sender loss is reported. |
+| 3 | As `tcp-load` version 3. |

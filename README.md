@@ -80,7 +80,9 @@ it says how much traffic that may be before it starts. Above 500 MB per phase it
 asks for confirmation, as `capacity` does. An invite made before UDP probes existed
 has no UDP port; the UDP half then reports `UNSUPPORTED`. An older node or invite
 without load reports both load checks `UNSUPPORTED`, and a node without QUIC the
-QUIC one.
+QUIC one. `-only` runs just the checks it lists — `-only udp-baseline` is the
+20-second idle part alone — and reports the others `SKIP`; the two baselines are one
+measurement side by side, so either runs both.
 
 ```bash
 ./bin/connverifier check -node @alice.invite
@@ -124,12 +126,13 @@ Inferred
 ```
 
 The text is in Chinese or English, following `LC_ALL`, `LC_MESSAGES` or `LANG`;
-any other language gets Chinese, and `-lang en` or `-lang zh-CN` overrides it.
+the `C` and `POSIX` locales get English, any other language Chinese, and `-lang en`
+or `-lang zh-CN` overrides it.
 What each status and number means, and when not to trust it, is in
 [docs/methods](docs/methods/README.md); the node protocol is in
 [docs/protocol.md](docs/protocol.md).
 
-Everything is a flag. `check`: `-node`, `-rate` (50), `-duration` (20s),
+Everything is a flag. `check`: `-node`, `-only` (all), `-rate` (50), `-duration` (20s),
 `-dial-timeout` (5s), `-load-interval` (1s), `-load-time` (20s), `-load-mb` (500),
 `-format`, `-lang`, `-yes`. `capacity`: `-node`, `-clients` (1000), `-start-rate` (100),
 `-heartbeat` (30s), `-dial-timeout` (5s), `-io-timeout` (5s), `-min-backoff`

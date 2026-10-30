@@ -32,7 +32,8 @@ func TestDetect(t *testing.T) {
 		{"LANG chinese", map[string]string{"LANG": "zh_CN.UTF-8"}, "zh-CN"},
 		{"LC_ALL wins", map[string]string{"LC_ALL": "en_GB.UTF-8", "LANG": "zh_CN.UTF-8"}, "en"},
 		{"LC_MESSAGES before LANG", map[string]string{"LC_MESSAGES": "en", "LANG": "zh_TW"}, "en"},
-		{"C locale falls back", map[string]string{"LC_ALL": "C", "LANG": "en_US"}, "zh-CN"},
+		{"C locale is English", map[string]string{"LC_ALL": "C", "LANG": "zh_CN.UTF-8"}, "en"},
+		{"C.UTF-8 is English", map[string]string{"LANG": "C.UTF-8"}, "en"},
 		{"unsupported falls back", map[string]string{"LANG": "de_DE.UTF-8"}, "zh-CN"},
 	}
 	for _, tt := range tests {
@@ -45,12 +46,12 @@ func TestDetect(t *testing.T) {
 }
 
 func TestNormalize(t *testing.T) {
-	for tag, want := range map[string]string{"zh": "zh-CN", "zh-CN": "zh-CN", "zh_Hans": "zh-CN", "EN": "en", "en-US": "en"} {
+	for tag, want := range map[string]string{"zh": "zh-CN", "zh-CN": "zh-CN", "zh_Hans": "zh-CN", "EN": "en", "en-US": "en", "C": "en", "C.UTF-8": "en", "POSIX": "en"} {
 		if got, ok := Normalize(tag); !ok || got != want {
 			t.Errorf("Normalize(%q) = %q, %v; want %q", tag, got, ok, want)
 		}
 	}
-	for _, tag := range []string{"", "C", "fr_FR"} {
+	for _, tag := range []string{"", "fr_FR", "de"} {
 		if _, ok := Normalize(tag); ok {
 			t.Errorf("Normalize(%q) accepted an unsupported tag", tag)
 		}

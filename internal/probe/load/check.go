@@ -44,7 +44,7 @@ type tcpUpload struct {
 func tcpUploads(checks []result.Check) map[string]tcpUpload {
 	ref := make(map[string]tcpUpload)
 	for _, c := range checks {
-		if c.ID != "tcp-load" {
+		if c.ID != TCPID {
 			continue
 		}
 		get := func(id string) (float64, bool) {
@@ -202,7 +202,7 @@ func finish(c *result.Check, phases []phaseResult, ur *echo.UDPRun, tr *echo.TCP
 			m.AtLeast = bounded(p, i, v)
 			c.Metrics = append(c.Metrics, m)
 			if d := p.dirs[i]; !d.down && d.sentKnown {
-				c.Metrics = append(c.Metrics, result.Ratio(lossID(id), d.resent, d.sent))
+				c.Metrics = append(c.Metrics, result.Share(lossID(id), d.resent, d.sent))
 			}
 		}
 		if !p.ran {

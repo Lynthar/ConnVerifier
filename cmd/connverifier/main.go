@@ -57,27 +57,31 @@ func main() {
 
 	switch cmd {
 	case "check":
+		var sel runner.Config
 		var cfg baseline.Config
 		var ld load.Config
 		var out output
 		var yes bool
 		parse(cmd, args, func(fs *flag.FlagSet) {
+			sel.RegisterFlags(fs)
 			cfg.RegisterFlags(fs)
 			ld.RegisterFlags(fs)
 			out.register(fs)
 			fs.BoolVar(&yes, "yes", false, "start a run above the default traffic without the confirmation prompt")
 		})
+		invalidIf(sel.Validate())
 		invalidIf(cfg.Validate())
 		ld.Use(cfg.Shared())
 		invalidIf(ld.Validate())
 		invalidIf(out.resolve())
-		if ld.Large() {
-			confirm(out.cat, ld.Notice(), yes)
-		} else {
-			fmt.Fprintln(os.Stderr, report.Message(out.cat, ld.Notice()))
+		switch n := sel.Loads(); {
+		case n > 0 && ld.Large():
+			confirm(out.cat, ld.Notice(n), yes)
+		case n > 0:
+			fmt.Fprintln(os.Stderr, report.Message(out.cat, ld.Notice(n)))
 		}
 		started := time.Now()
-		checks, err := runner.Check(ctx, cfg, ld, buildVersion())
+		checks, err := runner.Check(ctx, sel, cfg, ld, buildVersion())
 		if err != nil {
 			log.Fatal(err)
 		}

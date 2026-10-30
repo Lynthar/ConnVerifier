@@ -22,11 +22,22 @@ import (
 
 	"github.com/Lynthar/ConnVerifier/internal/netenv"
 	"github.com/Lynthar/ConnVerifier/internal/netx"
+	"github.com/Lynthar/ConnVerifier/internal/probe/baseline"
 	"github.com/Lynthar/ConnVerifier/internal/probe/echo"
 	"github.com/Lynthar/ConnVerifier/internal/probe/nodeclient"
 	"github.com/Lynthar/ConnVerifier/internal/protocol"
 	"github.com/Lynthar/ConnVerifier/internal/result"
 )
+
+// Check IDs; quic-load reads tcp-load's result by its ID.
+const (
+	TCPID  = "tcp-load"
+	QUICID = "quic-load"
+)
+
+// MethodVersion is both checks' method version: it goes up with any change to
+// their definitions, estimators, validity conditions or status rules.
+const MethodVersion = 3
 
 const (
 	defaultInterval  = time.Second
@@ -93,17 +104,15 @@ func (cfg Config) Validate() error {
 	return nil
 }
 
-// MaxMB is the most traffic the load phases of both checks may move, announced
-// before the run.
-func (cfg Config) MaxMB() int64 { return 2 * int64(len(phases)) * cfg.phaseMB }
-
 // Large reports whether the run moves more than the default allows; such a run
 // starts only after the user agrees.
 func (cfg Config) Large() bool { return cfg.phaseMB > defaultPhaseMB }
 
-// Notice says how much traffic the load phases may move.
-func (cfg Config) Notice() result.Message {
-	return result.Message{Key: "load.notice", Params: map[string]any{"mb": cfg.MaxMB(), "phase_mb": cfg.phaseMB, "phases": 2 * len(phases)}}
+// Notice says how much traffic the phases of that many load checks may move at
+// most, announced before the run.
+func (cfg Config) Notice(checks int) result.Message {
+	n := checks * len(phases)
+	return result.Message{Key: "load.notice", Params: map[string]any{"mb": int64(n) * cfg.phaseMB, "phase_mb": cfg.phaseMB, "phases": n}}
 }
 
 func (cfg Config) stage() time.Duration {
@@ -200,14 +209,14 @@ func run(ctx context.Context, cfg Config, version string, earlier []result.Check
 		dialUDP = func(ctx context.Context, a string) (net.Conn, error) { return netx.DialUDP(ctx, a) }
 	}
 
-	id, proto, transport, params := "tcp-load", "tcp", "", cfg.params()
+	id, proto, transport, params := TCPID, "tcp", "", cfg.params()
 	if quic {
-		id, proto, transport, params = "quic-load", "quic", protocol.TransportQUIC, cfg.quicParams(QUICGoVersion())
+		id, proto, transport, params = QUICID, "quic", protocol.TransportQUIC, cfg.quicParams(QUICGoVersion())
 	}
 	start := time.Now()
 	c = result.Check{
 		ID:            id,
-		MethodVersion: 2,
+		MethodVersion: MethodVersion,
 		Path:          result.Path{Node: inv.Addrs[0], Family: nodeclient.Family(inv.Addrs[0]), Protocol: proto},
 		Params:        params,
 		Metrics:       []result.Metric{},
@@ -489,9 +498,9 @@ func idleOf(checks []result.Check) idle {
 			return 0
 		}
 		switch c.ID {
-		case "udp-baseline":
+		case baseline.UDPID:
 			i.udpP50, i.udpP95 = get("rtt.p50"), get("rtt.p95")
-		case "tcp-baseline":
+		case baseline.TCPID:
 			i.tcpP50, i.tcpP95 = get("rtt.p50"), get("rtt.p95")
 		}
 	}

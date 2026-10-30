@@ -15,10 +15,11 @@
 结果也会写明上限是节点定的，不是你的网络。
 
 `connverifier check` 在同一条路径上并排测 UDP 和 TCP 的往返时延及其变化，以及 UDP 丢包——
-不用对时，也能把丢包拆成去程和回程。接着用 TCP 把路径跑满——下行、上行、双向——报 goodput，
-以及同样的往返时延在跑满时涨了多少，响应度按 IETF 草案 `draft-ietf-ippm-responsiveness` 的口径给出。
+不用对时，也能把丢包拆成去程和回程。接着先用 TCP、再用 QUIC（HTTP/3）把路径跑满——下行、上行、
+双向——分别报 goodput，以及同样的往返时延在跑满时涨了多少，响应度按 IETF 草案 `draft-ietf-ippm-responsiveness` 的口径给出。
 
-单个程序，依赖只有 Go 项目自己的 `golang.org/x/term` 与 `golang.org/x/sys`。
+单个程序。依赖是 Go 项目自己的 `golang.org/x/term`、`golang.org/x/sys`、`golang.org/x/crypto` 与
+`golang.org/x/net`，以及做 QUIC 的 [quic-go](https://github.com/quic-go/quic-go)。
 
 ## 构建
 
@@ -39,7 +40,7 @@ go build -o bin/connverifier ./cmd/connverifier
 ## 用法
 
 在服务器上起节点，给每个要来测的人各建一张邀请串。节点只开一个 TCP 端口（默认 7443），
-所有 TCP 流量都走它；UDP 探测在同号端口上应答——防火墙两样都要放行：
+所有 TCP 流量都走它；UDP 探测在同号端口上应答，QUIC 走下一个 UDP 端口（7444）——防火墙三样都要放行：
 
 ```bash
 ulimit -n 20480
@@ -60,10 +61,12 @@ ulimit -n 20480
 ./bin/connverifier capacity -node @alice.invite -clients 1000 -duration 1h -yes
 ```
 
-`check` 先在 UDP 和 TCP 上各发每秒 50 个小包，持续 20 秒（`-rate`、`-duration`），再分三段
-把路径跑满，每段至多 20 秒、500 MB（`-load-time`、`-load-mb`），开跑前先说明最多会用掉多少流量。
-每段超过 500 MB 时要确认，和 `capacity` 一样。UDP 探测出现之前建的邀请串里没有 UDP 端口，
-这时 UDP 那一项报 `UNSUPPORTED`；不支持负载的旧节点或邀请串，负载那一项报 `UNSUPPORTED`。
+`check` 先在 UDP 和 TCP 上各发每秒 50 个小包，持续 20 秒（`-rate`、`-duration`），再用 TCP
+分三段把路径跑满，每段至多 20 秒、500 MB（`-load-time`、`-load-mb`），然后用 QUIC 再跑同样的三段；
+开跑前先说明最多会用掉多少流量。每段超过 500 MB 时要确认，和 `capacity` 一样。UDP 探测出现之前
+建的邀请串里没有 UDP 端口，这时 UDP 那一项报 `UNSUPPORTED`；不支持负载的旧节点或邀请串，两项负载
+都报 `UNSUPPORTED`，节点不提供 QUIC 时 QUIC 那一项报 `UNSUPPORTED`。`-only` 只跑列出的检查——
+`-only udp-baseline` 就是单跑 20 秒的空闲部分——其余报 `SKIP`；两项基线是同一次并排测量，选哪一项都两项一起跑。
 
 ```bash
 ./bin/connverifier check -node @alice.invite
@@ -104,15 +107,16 @@ TCP 长连接容量：注意（WARN）
   - 25 条连接由节点说明原因后关闭（idle_timeout=25），不算网络掉线的证据。
 ```
 
-文本语言跟随 `LC_ALL`、`LC_MESSAGES` 或 `LANG`，支持中文和英文，其余一律用中文；
-`-lang en` 或 `-lang zh-CN` 可以覆盖。每个状态和数字是什么意思、什么时候不该信，见
+文本语言跟随 `LC_ALL`、`LC_MESSAGES` 或 `LANG`，支持中文和英文；`C` 与 `POSIX` 区域用英文，
+其余一律用中文；`-lang en` 或 `-lang zh-CN` 可以覆盖。每个状态和数字是什么意思、什么时候不该信，见
 [docs/methods](docs/methods/README.md)（英文）；节点协议见 [docs/protocol.md](docs/protocol.md)。
 
-全部走旗标。`check`：`-node`、`-rate`（50）、`-duration`（20s）、`-dial-timeout`（5s）、
+全部走旗标。`check`：`-node`、`-only`（全部）、`-rate`（50）、`-duration`（20s）、`-dial-timeout`（5s）、
 `-load-interval`（1s）、`-load-time`（20s）、`-load-mb`（500）、`-format`、`-lang`、`-yes`。`capacity`：`-node`、`-clients`（1000）、`-start-rate`（100）、`-heartbeat`（30s）、
 `-dial-timeout`（5s）、`-io-timeout`（5s）、`-min-backoff`（500ms）、`-max-backoff`（1m）、
 `-duration`（0＝直到中断）、`-log-drops`、`-format`（text）、`-lang`、`-yes`。`serve`：
-`-listen`（:7443）、`-listen-udp`（同 `-listen`）、`-state-dir`、`-max-conns`（20000）、
+`-listen`（:7443）、`-listen-udp`（同 `-listen`）、`-listen-quic`（`-listen` 的端口 + 1；`off` 关闭）、
+`-quic-port`（经端口映射时）、`-state-dir`、`-max-conns`（20000）、
 `-max-sessions`（64）、`-max-load-sessions`（1）、`-log-connections`。`invite create`：`-label`、`-addr`（可重复）、
 `-udp-port`（第一个 `-addr` 的端口）、`-max-sessions`（2）、`-max-connections`（20000）、
 `-max-dial-rate`（1000）、`-max-stamp-rate`（100）、`-max-duration`（24h）、`-max-idle`（1h）、
@@ -122,8 +126,8 @@ TCP 长连接容量：注意（WARN）
 
 ## 能力边界
 
-- **只用 TCP 跑满。** 还不测 UDP 带宽，没有 STUN、没有 DNS，UDP 只用一种包长；时延只有往返，
-  从不报单向。goodput 是到一个节点的：瓶颈是你的宽带还是节点机房的上行，不作判定。
+- **UDP 带宽就是 QUIC 的带宽。** 用 QUIC 自己的拥塞控制测，不靠灌包；比 TCP 低也不能证明网络在
+  限 UDP。没有 STUN、没有 DNS，UDP 只用一种包长；时延只有往返，从不报单向。goodput 是到一个节点的：瓶颈是你的宽带还是节点机房的上行，不作判定。
 - **JSON 的 schema 还是 `v0`。** 不同构建之间仍可能变；要解析就固定一个构建，别解析文本。
 - **退出码不评判网络质量。** 0 表示跑完了，不管各项状态如何；1 表示有检查没拿到有效
   测量（状态 `ERROR`，比如节点连不上），或工具自己出错；2 表示什么都没跑：参数不对，或

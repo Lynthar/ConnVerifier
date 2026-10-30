@@ -69,10 +69,10 @@ func goldenRun() result.Run {
 		LoadStart: &result.NodeLoad{Sessions: 1, MaxConnections: 20000, UptimeS: 3600},
 		LoadEnd:   &result.NodeLoad{MaxConnections: 20000, UptimeS: 3624},
 	}
-	udp := newCheck("udp-baseline", "udp", cfg, "192.0.2.10:7443", "example", udpPacketLen)
+	udp := newCheck(UDPID, "udp", cfg, "192.0.2.10:7443", "example", udpPacketLen)
 	udp.Node = node
 	finishUDP(&udp, syntheticUDP(1000, 0), &protocol.StampCounts{Received: 990}, defaultTmax, echo.DefaultSlipLimit)
-	tcp := newCheck("tcp-baseline", "tcp", cfg, "192.0.2.10:7443", "example", tcpPacketLen)
+	tcp := newCheck(TCPID, "tcp", cfg, "192.0.2.10:7443", "example", tcpPacketLen)
 	tcp.Node = node
 	finishTCP(&tcp, syntheticTCP(1000), defaultTmax, echo.DefaultSlipLimit)
 	udp.ElapsedMs, tcp.ElapsedMs = 23_100, 23_100

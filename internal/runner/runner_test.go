@@ -1,9 +1,15 @@
 package runner
 
 import (
+	"bytes"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/Lynthar/ConnVerifier/internal/i18n"
+	"github.com/Lynthar/ConnVerifier/internal/report"
+	"github.com/Lynthar/ConnVerifier/internal/result"
 )
 
 func TestConfirm(t *testing.T) {
@@ -37,5 +43,59 @@ func TestConfirm(t *testing.T) {
 				t.Fatalf("prompt shown = %v, want %v", asked, tt.asked)
 			}
 		})
+	}
+}
+
+func TestSelection(t *testing.T) {
+	tests := []struct {
+		only  string
+		valid bool
+		runs  []string
+		loads int
+	}{
+		{"", true, checkIDs, 2},
+		{"udp-baseline", true, []string{"udp-baseline"}, 0},
+		{" tcp-load , quic-load ", true, []string{"tcp-load", "quic-load"}, 2},
+		{"quic-load,", true, []string{"quic-load"}, 1},
+		{"tcp-load,dns", false, nil, 0},
+		{"TCP-load", false, nil, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.only, func(t *testing.T) {
+			cfg := Config{only: tt.only}
+			if err := cfg.Validate(); (err == nil) != tt.valid {
+				t.Fatalf("Validate = %v, want valid %v", err, tt.valid)
+			}
+			if !tt.valid {
+				return
+			}
+			var runs []string
+			for _, id := range checkIDs {
+				if cfg.Selected(id) {
+					runs = append(runs, id)
+				}
+			}
+			if !slices.Equal(runs, tt.runs) || cfg.Loads() != tt.loads {
+				t.Fatalf("runs %v and %d loads, want %v and %d", runs, cfg.Loads(), tt.runs, tt.loads)
+			}
+		})
+	}
+}
+
+// A check left out by -only says so in every language, in two lines of text.
+func TestSkippedRenders(t *testing.T) {
+	run := result.Run{Checks: []result.Check{skipped("tcp-load", 3, "tcp", "192.0.2.10:7443")}}
+	for _, lang := range i18n.Supported {
+		cat, err := i18n.Load(lang)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var b bytes.Buffer
+		if err := report.Text(&b, run, cat); err != nil {
+			t.Fatal(err)
+		}
+		if out := b.String(); strings.Contains(out, "check.not_selected") || strings.Count(out, "\n") != 2 || !strings.Contains(out, "SKIP") {
+			t.Errorf("%s:\n%s", lang, out)
+		}
 	}
 }
