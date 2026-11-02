@@ -86,7 +86,7 @@ func fillStream(s *echo.Stream, p []phaseResult) {
 // Linux's default UDP buffers, compared with a tcp-load that moved twice its upload
 // at a twentieth of its loss and did not measure both directions.
 func goldenCheck(quic bool) result.Check {
-	cfg := Config{interval: time.Second, phaseTime: 20 * time.Second, phaseMB: 500, rate: 50, slipLimit: echo.DefaultSlipLimit, cpuMax: 0.875}
+	cfg := Config{interval: time.Second, phaseTime: 20 * time.Second, dirMB: 500, rate: 50, slipLimit: echo.DefaultSlipLimit, cpuMax: 0.875}
 	ph := syntheticPhases()
 	ur, tr := &echo.UDPRun{End: at(60)}, &echo.TCPRun{End: at(60)}
 	fillStream(&ur.Stream, ph)
@@ -241,7 +241,7 @@ func TestTextHasNoRawKeys(t *testing.T) {
 	}
 	add(func(c *result.Check) {
 		c.NotProven = []result.Message{{Key: "load.not_proven.no_tcp_probe", Params: map[string]any{"error": "x"}}}
-		c.Warnings = []result.Message{Config{phaseMB: 500}.Notice(2)}
+		c.Warnings = []result.Message{Config{dirMB: 500, phaseTime: 20 * time.Second}.Notice(2)}
 	})
 	run := result.Run{Checks: checks}
 	rawKey := regexp.MustCompile(`\b(load|quic_load|baseline|scope|stop|level|metric|param|label|section|status|check|line|value|node)\.[A-Za-z_]`)

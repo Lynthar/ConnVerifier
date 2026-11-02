@@ -67,18 +67,15 @@ func main() {
 			cfg.RegisterFlags(fs)
 			ld.RegisterFlags(fs)
 			out.register(fs)
-			fs.BoolVar(&yes, "yes", false, "start a run above the default traffic without the confirmation prompt")
+			fs.BoolVar(&yes, "yes", false, "start the load checks without the confirmation prompt (required when stdin is not a terminal)")
 		})
 		invalidIf(sel.Validate())
 		invalidIf(cfg.Validate())
 		ld.Use(cfg.Shared())
 		invalidIf(ld.Validate())
 		invalidIf(out.resolve())
-		switch n := sel.Loads(); {
-		case n > 0 && ld.Large():
+		if n := sel.Loads(); n > 0 {
 			confirm(out.cat, ld.Notice(n), yes)
-		case n > 0:
-			fmt.Fprintln(os.Stderr, report.Message(out.cat, ld.Notice(n)))
 		}
 		started := time.Now()
 		checks, err := runner.Check(ctx, sel, cfg, ld, buildVersion())

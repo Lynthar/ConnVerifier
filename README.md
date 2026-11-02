@@ -75,9 +75,11 @@ ulimit -n 20480
 
 `check` first sends 50 small packets a second over UDP and over TCP for 20 seconds
 (`-rate`, `-duration`), then loads the path in three phases of at most 20 seconds
-and 500 MB each (`-load-time`, `-load-mb`) over TCP, and the same three over QUIC;
-it says how much traffic that may be before it starts. Above 500 MB per phase it
-asks for confirmation, as `capacity` does. An invite made before UDP probes existed
+(`-load-time`) over TCP, and the same three over QUIC. A phase ends once its values
+settle, so the traffic grows with the line's rate: about 1–2 GB for a whole check
+at 100 Mbit/s, 10–20 GB at 1 Gbit/s, up to 25 000 MB per direction of a phase
+(`-load-mb`). It says how much that may be and asks for confirmation before it
+starts, as `capacity` does. An invite made before UDP probes existed
 has no UDP port; the UDP half then reports `UNSUPPORTED`. An older node or invite
 without load reports both load checks `UNSUPPORTED`, and a node without QUIC the
 QUIC one. `-only` runs just the checks it lists — `-only udp-baseline` is the
@@ -133,7 +135,7 @@ What each status and number means, and when not to trust it, is in
 [docs/protocol.md](docs/protocol.md).
 
 Everything is a flag. `check`: `-node`, `-only` (all), `-rate` (50), `-duration` (20s),
-`-dial-timeout` (5s), `-load-interval` (1s), `-load-time` (20s), `-load-mb` (500),
+`-dial-timeout` (5s), `-load-interval` (1s), `-load-time` (20s), `-load-mb` (25000),
 `-format`, `-lang`, `-yes`. `capacity`: `-node`, `-clients` (1000), `-start-rate` (100),
 `-heartbeat` (30s), `-dial-timeout` (5s), `-io-timeout` (5s), `-min-backoff`
 (500ms), `-max-backoff` (1m), `-duration` (0 = until interrupted), `-log-drops`,
@@ -143,7 +145,7 @@ Everything is a flag. `check`: `-node`, `-only` (all), `-rate` (50), `-duration`
 `-max-load-sessions` (1), `-log-connections`. `invite create`: `-label`, `-addr` (repeatable),
 `-udp-port` (the first `-addr`'s port), `-max-sessions` (2), `-max-connections`
 (20000), `-max-dial-rate` (1000), `-max-stamp-rate` (100), `-max-duration` (24h),
-`-max-idle` (1h), `-max-load-mb` (2000), `-max-load-mb-per-day` (20000),
+`-max-idle` (1h), `-max-load-mb` (10000), `-max-load-mb-per-day` (100000),
 `-max-load-connections` (48).
 
 Neither side enables TCP keepalive: keepalive probes would refresh the NAT

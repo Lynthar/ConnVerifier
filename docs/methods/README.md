@@ -9,8 +9,8 @@ version follows.
 | `tcp-capacity` | 3 | [tcp-capacity.md](tcp-capacity.md) |
 | `udp-baseline` | 1 | [udp-baseline.md](udp-baseline.md) |
 | `tcp-baseline` | 1 | [tcp-baseline.md](tcp-baseline.md) |
-| `tcp-load` | 3 | [tcp-load.md](tcp-load.md) |
-| `quic-load` | 3 | [quic-load.md](quic-load.md) |
+| `tcp-load` | 4 | [tcp-load.md](tcp-load.md) |
+| `quic-load` | 4 | [quic-load.md](quic-load.md) |
 
 ## What each method document answers
 

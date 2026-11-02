@@ -89,8 +89,9 @@ func newLab(t *testing.T, inviteArgs ...string) *lab {
 		sh(t, "ip", "netns", "exec", x.ns, "ethtool", "-K", x.ifc, "tso", "off", "gso", "off")
 	}
 	state := filepath.Join(t.TempDir(), "node")
-	// Ten runs of both loads at 1 Gbit/s move about 30 GB, past the default daily quota.
-	args := append([]string{"invite", "create", "-state-dir", state, "-label", "acc", "-addr", nodeIP + ":7443", "-max-load-mb-per-day", "200000"}, inviteArgs...)
+	// Ten runs of both loads at the default session grant move up to 200 GB, past the
+	// default daily quota.
+	args := append([]string{"invite", "create", "-state-dir", state, "-label", "acc", "-addr", nodeIP + ":7443", "-max-load-mb-per-day", "1000000"}, inviteArgs...)
 	cmd := exec.Command(bin, args...)
 	out, err := cmd.Output()
 	if err != nil {
@@ -187,7 +188,7 @@ var baselineOnly = []string{"-load-time", "1s", "-load-mb", "1"}
 // wraps the command (such as a CPU-limited scope).
 func (l *lab) check(args []string, prefix ...string) (udp, tcp result.Check, loads []result.Check) {
 	l.t.Helper()
-	args = append(append(append(append(prefix, "ip", "netns", "exec", clientNS), l.clientAs...), bin, "check", "-format", "json"), args...)
+	args = append(append(append(append(prefix, "ip", "netns", "exec", clientNS), l.clientAs...), bin, "check", "-format", "json", "-yes"), args...)
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Env = append(os.Environ(), "CONNVERIFIER_NODE="+l.invite)
 	var stdout, stderr bytes.Buffer
@@ -683,7 +684,7 @@ func TestQE1QUICHeldByThisHost(t *testing.T) {
 	l.shape(false, "10ms", "300mbit", "200ms", false)
 	l.shape(true, "10ms", "300mbit", "200ms", false)
 	for run := range 3 {
-		_, _, loads := l.check([]string{"-duration", "10s", "-load-mb", "3000", "-yes"}, "systemd-run", "--quiet", "--scope", "-p", "CPUQuota=10%")
+		_, _, loads := l.check([]string{"-duration", "10s", "-load-mb", "3000"}, "systemd-run", "--quiet", "--scope", "-p", "CPUQuota=10%")
 		tcpUp, _ := value(loads[0], "upload.goodput")
 		quicUp, m := value(loads[1], "upload.goodput")
 		t.Logf("run %d: upload tcp %.1f (C %.1f) loss %.3f%%, quic %.1f at least %v loss %.3f%%; %s", run, tcpUp, ceiling(300e6),
@@ -706,7 +707,7 @@ func TestQE2PathHoldsBoth(t *testing.T) {
 			l := newLab(t, "-max-load-mb", "20000")
 			b.setup(l)
 			for run := range 3 {
-				_, _, loads := l.check([]string{"-duration", "10s", "-load-mb", "3000", "-yes"})
+				_, _, loads := l.check([]string{"-duration", "10s", "-load-mb", "3000"})
 				for _, ph := range []string{"upload", "bidirectional"} {
 					t.Logf("run %d %s: sender loss tcp %.3f%% quic %.3f%%", run, ph, senderLoss(loads[0], ph), senderLoss(loads[1], ph))
 				}

@@ -14,7 +14,7 @@
   "checks": [
     {
       "id": "tcp-load",
-      "method_version": 3,
+      "method_version": 4,
       "status": "WARN",
       "path": {
         "node": "192.0.2.10:7443",
@@ -22,11 +22,11 @@
         "protocol": "tcp"
       },
       "params": {
+        "direction_mb": 500,
         "interval_ms": 1000,
         "max_connections": 16,
         "method": "draft-ietf-ippm-responsiveness-09",
         "moving_average": 4,
-        "phase_mb": 500,
         "phase_time_ms": 20000,
         "probe_pairs_per_s": 20,
         "probe_rate_per_s": 50,
@@ -578,7 +578,7 @@
     },
     {
       "id": "quic-load",
-      "method_version": 3,
+      "method_version": 4,
       "status": "WARN",
       "path": {
         "node": "192.0.2.10:7444",
@@ -586,11 +586,11 @@
         "protocol": "quic"
       },
       "params": {
+        "direction_mb": 500,
         "interval_ms": 1000,
         "max_connections": 16,
         "method": "draft-ietf-ippm-responsiveness-09 (HTTP/3)",
         "moving_average": 4,
-        "phase_mb": 500,
         "phase_time_ms": 20000,
         "probe_pairs_per_s": 20,
         "probe_rate_per_s": 50,

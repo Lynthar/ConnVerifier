@@ -244,8 +244,8 @@ request.
 | Idle period a session may ask for | 1 h | `invite create -max-idle` |
 | STAMP packets per second per session | 100 | `invite create -max-stamp-rate` |
 | Sessions with load at once on the node | 1 (0: no load offered) | `serve -max-load-sessions` |
-| Load traffic per session | 2 000 MB (0: no load) | `invite create -max-load-mb` |
-| Load traffic per invite per UTC day, counted in memory and reset when the node restarts | 20 000 MB | `invite create -max-load-mb-per-day` |
+| Load traffic per session | 10 000 MB (0: no load) | `invite create -max-load-mb` |
+| Load traffic per invite per UTC day, counted in memory and reset when the node restarts | 100 000 MB | `invite create -max-load-mb-per-day` |
 | Load connections per session, TCP or QUIC | 48 | `invite create -max-load-connections` |
 | HTTP/3 port | the TCP port + 1 (`off`: none) | `serve -listen-quic`; `serve -quic-port` sets the port granted, behind a port mapping |
 | Connections not yet past TLS or HELLO | 32 per address, 1 024 in total, plus the load connections of the address's live load sessions | fixed |

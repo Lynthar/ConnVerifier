@@ -1,13 +1,13 @@
 TCP under load: goodput and responsiveness: attention (WARN)
 Node: 192.0.2.10:7443 · IPv4 · TCP
-Method version: 3
+Method version: 4
 Elapsed: 52.4 s
 Parameters
+  Most traffic per direction of a phase (MB): 500
   Interval for adding connections and testing stability: 1 s
   Load connections per direction, max: 16
   Method: draft-ietf-ippm-responsiveness-09
   Moving average (intervals): 4
-  Most traffic per phase (MB): 500
   Longest time per phase: 20 s
   Responsiveness probe pairs per second, max: 20
   Independent probe packets per second: 50
@@ -113,14 +113,14 @@ Not proven
 
 QUIC under load: goodput and responsiveness: attention (WARN)
 Node: 192.0.2.10:7444 · IPv4 · QUIC
-Method version: 3
+Method version: 4
 Elapsed: 52.4 s
 Parameters
+  Most traffic per direction of a phase (MB): 500
   Interval for adding connections and testing stability: 1 s
   Load connections per direction, max: 16
   Method: draft-ietf-ippm-responsiveness-09 (HTTP/3)
   Moving average (intervals): 4
-  Most traffic per phase (MB): 500
   Longest time per phase: 20 s
   Responsiveness probe pairs per second, max: 20
   Independent probe packets per second: 50

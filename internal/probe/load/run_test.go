@@ -52,12 +52,12 @@ func startNode(t *testing.T, lim node.InviteLimits, flags ...string) memNode {
 	return n
 }
 
-// memConfig is a short run: 100 ms intervals, phases of at most 2 s and mb MB.
+// memConfig is a short run: 100 ms intervals, phases of at most 2 s and mb MB a direction.
 // Validity limits are off: in memory the load is bound by this machine's CPU
 // by construction, which is exactly what they would report.
 func memConfig(n memNode, mb int64) Config {
 	return Config{
-		interval: 100 * time.Millisecond, phaseTime: 2 * time.Second, phaseMB: mb,
+		interval: 100 * time.Millisecond, phaseTime: 2 * time.Second, dirMB: mb,
 		node: n.invite, rate: 50, dialTimeout: 2 * time.Second,
 		slipLimit: time.Second, cpuMax: 2,
 		dial:    n.ln.Dial,
@@ -113,8 +113,9 @@ func waitGoroutines(t *testing.T, base int) {
 	}
 }
 
-// Every phase runs against a real node and stops at its traffic limit; what the
-// client counted and what the node counted agree, and nothing is left running.
+// Every phase runs against a real node and stops at its traffic limit, 2 MB a
+// direction; what the client counted and what the node counted agree, and nothing
+// is left running.
 func TestPhasesStopAtTheTrafficLimit(t *testing.T) {
 	base := runtime.NumGoroutine()
 	n := startNode(t, node.DefaultInviteLimits)
@@ -130,10 +131,10 @@ func TestPhasesStopAtTheTrafficLimit(t *testing.T) {
 		t.Errorf("elapsed %d ms for three phases", c.ElapsedMs)
 	}
 	var client float64
-	for _, p := range []string{"download", "upload", "bidirectional"} {
-		b := value(t, c, p+".bytes")
-		if b < 2e6 || b > 3e6 {
-			t.Errorf("%s moved %v bytes; want the 2 MB limit plus at most a chunk per connection", p, b)
+	for _, p := range phases {
+		b, limit := value(t, c, p.name+".bytes"), float64(p.directions())*2e6
+		if b < limit || b > limit+1e6 {
+			t.Errorf("%s moved %v bytes; want the %v-byte limit plus at most a chunk per connection", p.name, b, limit)
 		}
 		client += b
 	}
@@ -173,10 +174,10 @@ func TestQUICPhasesStopAtTheTrafficLimit(t *testing.T) {
 		t.Fatalf("status %s %v", c.Status, keys(c))
 	}
 	var client float64
-	for _, p := range []string{"download", "upload", "bidirectional"} {
-		b := value(t, c, p+".bytes")
-		if b < 2e6 || b > 3e6 {
-			t.Errorf("%s moved %v bytes; want the 2 MB limit plus at most a chunk per connection", p, b)
+	for _, p := range phases {
+		b, limit := value(t, c, p.name+".bytes"), float64(p.directions())*2e6
+		if b < limit || b > limit+1e6 {
+			t.Errorf("%s moved %v bytes; want the %v-byte limit plus at most a chunk per connection", p.name, b, limit)
 		}
 		client += b
 	}

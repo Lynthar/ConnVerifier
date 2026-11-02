@@ -1,6 +1,6 @@
 # `tcp-load` — goodput and round trips with the path loaded
 
-Method version **3**.
+Method version **4**.
 
 ## 1. Question
 
@@ -50,7 +50,7 @@ time, in a session of its own.
   | Probe pairs per second (MPS) | 20 [100] |
   | Share of goodput for probes (PTC) | 5% [5%] |
   | Longest phase | 20 s — `-load-time` |
-  | Most traffic per phase | 500 MB — `-load-mb`; more needs confirming |
+  | Most traffic per direction of a phase | 25 000 MB, 10 Gbit/s for the whole phase — `-load-mb`; a smaller grant from the node is shared alike among the four phase directions |
 
 - **Algorithm** (draft §5.4): each interval one more load connection opens per
   direction, up to 16. While goodput has not settled, the moving average over the
@@ -189,8 +189,9 @@ Other traffic on this host or its network is not checked; every result says so.
 
 This host sends the node load data — zeros, holding nothing of this host — and
 probe requests. The node sees this host's address and traffic pattern. Before the
-run the tool states how much traffic it may move: three phases of at most
-`-load-mb` each, and as many again for `quic-load`. The result holds the parameters, per-phase values and counts, and
+run the tool states how much traffic it may move — four phase directions (both at
+once counts two) of at most `-load-mb` each, and as many again for `quic-load` — and
+starts only once the user confirms. The result holds the parameters, per-phase values and counts, and
 what the node reported (bytes it sent and received, its timer); not the raw samples.
 It is printed and not sent anywhere.
 
@@ -258,3 +259,4 @@ rules change.
 | 1 | First version. |
 | 2 | This host or the node falling behind, and late probes, report goodput as a lower bound and qualify round trips instead of making the result `INVALID`; CPU use only adds a note. A settled goodput's value starts at the moving average that settled it. Sender loss (`sender_loss`) is reported. |
 | 3 | Sender loss is reported without an interval. |
+| 4 | Each direction of a phase moves at most `-load-mb`, 25 000 MB, instead of each phase 500 MB: a phase ends when its values settle, so the traffic follows the line's rate. |

@@ -50,10 +50,12 @@ type InviteLimits struct {
 }
 
 // DefaultInviteLimits are the per-invite caps when invite create is not told others.
+// A session's load bytes let a 1 Gbit/s path run all four phase directions for the
+// whole 20 s; a day holds ten such sessions.
 var DefaultInviteLimits = InviteLimits{
 	MaxSessions: 2, MaxConnections: 20000, MaxDialRate: 1000,
 	MaxDurationS: 24 * 3600, MaxIdleTimeoutS: 3600, MaxStampRate: 100,
-	MaxLoadBytes: 2_000_000_000, MaxLoadBytesPerDay: 20_000_000_000, MaxLoadConnections: 48,
+	MaxLoadBytes: 10_000_000_000, MaxLoadBytesPerDay: 100_000_000_000, MaxLoadConnections: 48,
 }
 
 func (l InviteLimits) Validate() error {

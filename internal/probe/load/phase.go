@@ -63,6 +63,13 @@ type phaseSpec struct {
 
 var phases = []phaseSpec{{"download", true, false}, {"upload", false, true}, {"bidirectional", true, true}}
 
+func (s phaseSpec) directions() int {
+	if s.down && s.up {
+		return 2
+	}
+	return 1
+}
+
 // target is a session's load endpoints on one node address: over TCP, or over
 // HTTP/3 when quic is set.
 type target struct {

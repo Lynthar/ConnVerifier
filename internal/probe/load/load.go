@@ -37,12 +37,12 @@ const (
 
 // MethodVersion is both checks' method version: it goes up with any change to
 // their definitions, estimators, validity conditions or status rules.
-const MethodVersion = 3
+const MethodVersion = 4
 
 const (
 	defaultInterval  = time.Second
 	defaultPhaseTime = 20 * time.Second
-	defaultPhaseMB   = 500
+	defaultDirMB     = 25_000 // 10 Gbit/s for a whole phase
 	// Between phases the check waits until the independent probes' round trips are
 	// back near idle — the last phase's queue has drained — at least minDrain and at
 	// most maxDrain.
@@ -65,7 +65,7 @@ const (
 type Config struct {
 	interval  time.Duration
 	phaseTime time.Duration
-	phaseMB   int64
+	dirMB     int64 // per direction of a phase
 	// Shared with the baseline flags; see Use.
 	node        string
 	rate        int
@@ -83,7 +83,7 @@ type Config struct {
 func (cfg *Config) RegisterFlags(fs *flag.FlagSet) {
 	fs.DurationVar(&cfg.interval, "load-interval", defaultInterval, "interval at which the load check adds a connection and tests for a settled value (the draft's ID)")
 	fs.DurationVar(&cfg.phaseTime, "load-time", defaultPhaseTime, "longest each of the three load phases runs")
-	fs.Int64Var(&cfg.phaseMB, "load-mb", defaultPhaseMB, "most traffic each load phase moves, in MB; above the default the run needs confirming")
+	fs.Int64Var(&cfg.dirMB, "load-mb", defaultDirMB, "most traffic each direction of a load phase moves, in MB")
 }
 
 // Use takes the settings shared with the baseline checks.
@@ -98,21 +98,28 @@ func (cfg Config) Validate() error {
 		return errors.New("load-interval must be 100ms to 10s")
 	case cfg.phaseTime < cfg.interval || cfg.phaseTime > 10*time.Minute:
 		return errors.New("load-time must be from load-interval to 10m")
-	case cfg.phaseMB < 1 || cfg.phaseMB > 100_000:
+	case cfg.dirMB < 1 || cfg.dirMB > 100_000:
 		return errors.New("load-mb must be 1 to 100000")
 	}
 	return nil
 }
 
-// Large reports whether the run moves more than the default allows; such a run
-// starts only after the user agrees.
-func (cfg Config) Large() bool { return cfg.phaseMB > defaultPhaseMB }
-
 // Notice says how much traffic the phases of that many load checks may move at
-// most, announced before the run.
+// most, and at most on a 1 Gbit/s line, for the confirmation before the run.
 func (cfg Config) Notice(checks int) result.Message {
-	n := checks * len(phases)
-	return result.Message{Key: "load.notice", Params: map[string]any{"mb": int64(n) * cfg.phaseMB, "phase_mb": cfg.phaseMB, "phases": n}}
+	n := int64(checks * directions())
+	gbit := min(cfg.dirMB, int64(125*cfg.phaseTime.Seconds())) // 1 Gbit/s is 125 MB/s
+	return result.Message{Key: "load.notice", Params: map[string]any{"mb": n * cfg.dirMB, "direction_mb": cfg.dirMB,
+		"directions": n, "time_s": cfg.phaseTime.Seconds(), "gbit_mb": n * gbit}}
+}
+
+// directions counts the directions of all phases: both at once is two.
+func directions() int {
+	n := 0
+	for _, s := range phases {
+		n += s.directions()
+	}
+	return n
 }
 
 func (cfg Config) stage() time.Duration {
@@ -126,7 +133,7 @@ func (cfg Config) want() protocol.Limits {
 		DurationS:       int(math.Ceil((cfg.stage() + 2*tmax + sessionMargin).Seconds())),
 		IdleTimeoutS:    60,
 		StampRate:       min(2*cfg.rate, protocol.MaxStampRate),
-		LoadBytes:       int64(len(phases))*cfg.phaseMB*1e6 + probeAllowance,
+		LoadBytes:       int64(directions())*cfg.dirMB*1e6 + probeAllowance,
 		LoadConnections: 2*mnp + probeHeadroom,
 	}
 }
@@ -136,7 +143,7 @@ func (cfg Config) params() map[string]any {
 		"method":             "draft-ietf-ippm-responsiveness-09",
 		"interval_ms":        cfg.interval.Milliseconds(),
 		"phase_time_ms":      cfg.phaseTime.Milliseconds(),
-		"phase_mb":           cfg.phaseMB,
+		"direction_mb":       cfg.dirMB,
 		"max_connections":    mnp,
 		"probe_pairs_per_s":  mps,
 		"probe_rate_per_s":   cfg.rate,
@@ -284,8 +291,8 @@ func run(ctx context.Context, cfg Config, version string, earlier []result.Check
 		}
 		c.Path.Node = t.quic.hostport
 	}
-	allowance := min(probeAllowance, lg.Bytes/10) // a small grant still leaves the phases most of it
-	phaseBytes := min(cfg.phaseMB*1e6, (lg.Bytes-allowance)/int64(len(phases)))
+	allowance := min(probeAllowance, lg.Bytes/10)                            // a small grant still leaves the phases most of it
+	dirBytes := min(cfg.dirMB*1e6, (lg.Bytes-allowance)/int64(directions())) // a smaller grant shared alike
 	maxConns := max(lg.Connections-probeHeadroom, 2)
 	probes := startProbes(ctx, cfg, sess, inv, dial, dialUDP)
 	base := idleOf(earlier)
@@ -303,7 +310,7 @@ func run(ctx context.Context, cfg Config, version string, earlier []result.Check
 		}
 		ticks0, over0 := lag.Counts()
 		cpu0, cpuOK := netenv.ProcessCPU()
-		r := runPhase(ctx, t, spec, cfg.interval, cfg.phaseTime, phaseBytes, maxConns)
+		r := runPhase(ctx, t, spec, cfg.interval, cfg.phaseTime, int64(spec.directions())*dirBytes, maxConns)
 		r.waited, r.drained = waited, drained
 		ticks1, over1 := lag.Counts()
 		r.lagTicks, r.lagOver = ticks1-ticks0, over1-over0
