@@ -388,4 +388,9 @@ func TestQUICGoodputSettlesAtTheBottleneck(t *testing.T) {
 			t.Errorf("%s.rpm = %+v; want foreign and self probes over QUIC", p, m)
 		}
 	}
+	for _, id := range []string{"download.sender_loss", "bidirectional.sender_loss.download"} {
+		if m, _ := metric(c, id); m.Value == nil || m.Samples == 0 {
+			t.Errorf("%s = %+v; want what the node's QUIC downloads sent, as it reported", id, m)
+		}
+	}
 }

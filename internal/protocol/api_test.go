@@ -105,7 +105,16 @@ func TestSessionEndValidate(t *testing.T) {
 	for _, tt := range []struct {
 		load *LoadCounts
 		ok   bool
-	}{{nil, true}, {&LoadCounts{Sent: 10, LagTicks: 5, LagOver: 5}, true}, {&LoadCounts{LagTicks: 1, LagOver: 2}, false}} {
+	}{
+		{nil, true},
+		{&LoadCounts{Sent: 10, LagTicks: 5, LagOver: 5}, true},
+		{&LoadCounts{LagTicks: 1, LagOver: 2}, false},
+		{&LoadCounts{Download: map[string]SenderCounts{"download": {Sent: 10, Resent: 10}, "bidirectional": {}}}, true},
+		{&LoadCounts{Download: map[string]SenderCounts{"download": {Sent: 1, Resent: 2}}}, false},
+		{&LoadCounts{Download: map[string]SenderCounts{"Download": {Sent: 1}}}, false},
+		{&LoadCounts{Download: map[string]SenderCounts{"": {}}}, false},
+		{&LoadCounts{Download: map[string]SenderCounts{"a": {}, "b": {}, "c": {}, "d": {}, "e": {}}}, false},
+	} {
 		e := SessionEnd{Load: tt.load}
 		if err := e.Validate(); (err == nil) != tt.ok {
 			t.Errorf("load %+v: %v", tt.load, err)
@@ -140,6 +149,24 @@ func TestClientTLSTrustsOnlyThePinnedKey(t *testing.T) {
 	if err := handshake(impostor); !errors.Is(err, ErrPinMismatch) {
 		t.Fatalf("handshake with another key = %v, want pin mismatch", err)
 	}
+}
+
+func FuzzDecodeSessionEnd(f *testing.F) {
+	f.Add(`{"node":{"version":"v","load":{"sessions":0,"connections":0,"max_connections":1,"uptime_s":1}},"load":{"sent":1,"received":2,"lag_ticks":3,"lag_over":1,"download":{"download":{"sent":9,"resent":1}}}}`)
+	f.Add(`{"load":{"download":{"x":{"sent":1,"resent":2}}}}`)
+	f.Fuzz(func(t *testing.T, body string) {
+		var e SessionEnd
+		if err := DecodeJSON(strings.NewReader(body), &e); err != nil {
+			return
+		}
+		if l := e.Load; l != nil {
+			for name, c := range l.Download {
+				if !ValidPhase(name) || c.Resent > c.Sent || len(l.Download) > MaxPhases {
+					t.Fatalf("accepted download counts %q %+v", name, c)
+				}
+			}
+		}
+	})
 }
 
 func FuzzDecodeSessionRequest(f *testing.F) {

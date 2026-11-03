@@ -220,8 +220,9 @@ type direction struct {
 	finalBPS  float64
 	wires     []*wireConn  // guarded by phaseRun.mu
 	quics     []*quic.Conn // guarded by phaseRun.mu: the HTTP/3 connections that opened
-	// What this host's connections sent and sent again, for an upload once the
-	// phase ends; sentKnown is false when no connection could tell.
+	// What the sending side's connections sent and sent again: this host's for an
+	// upload once the phase ends, the node's for a download once the session ends;
+	// sentKnown is false when the sender could not tell.
 	sent, resent uint64
 	sentKnown    bool
 }
@@ -233,6 +234,7 @@ func (d *direction) established() int { return d.conns - int(d.failed.Load()) }
 // phaseRun is one phase in progress.
 type phaseRun struct {
 	t             *target
+	name          string // the phase's, for the node's counts of its downloads
 	id            time.Duration
 	limit         int64 // bytes in all directions
 	maxConns      int
@@ -468,7 +470,7 @@ func (p *phaseRun) start(tr http.RoundTripper, d *direction, arm func()) {
 // download reads the large object; its end means the node's grant ran out. A
 // connection that fails before the response begins never carried its stream.
 func (p *phaseRun) download(tr http.RoundTripper, d *direction, arm func()) {
-	resp, err := tr.RoundTrip(p.t.request(p.ctx, http.MethodGet, protocol.LoadLarge, nil))
+	resp, err := tr.RoundTrip(p.t.request(p.ctx, http.MethodGet, protocol.LoadLarge+"?"+protocol.LoadPhase+"="+p.name, nil))
 	if err != nil {
 		p.connectFailed(d, err)
 		return
@@ -745,7 +747,7 @@ func (p *phaseRun) window(from, to time.Time) ([]foreignProbe, []selfProbe) {
 // responsiveness, or until the time limit, the byte limit, an error or ctx.
 func runPhase(ctx context.Context, t *target, spec phaseSpec, id, maxTime time.Duration, bytes int64, maxConns int) phaseResult {
 	pctx, cancel := context.WithCancel(ctx)
-	p := &phaseRun{t: t, id: id, limit: bytes, maxConns: maxConns, ctx: pctx, cancel: cancel, stopCh: make(chan struct{})}
+	p := &phaseRun{t: t, name: spec.name, id: id, limit: bytes, maxConns: maxConns, ctx: pctx, cancel: cancel, stopCh: make(chan struct{})}
 	start := time.Now()
 	quic := t.quic != nil
 	if spec.down {

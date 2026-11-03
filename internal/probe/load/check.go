@@ -24,25 +24,27 @@ func beyond(k, n uint64) bool { return k*100 > n }
 // tenth of a core 11% and more in every phase.
 func lagging(late, n uint64) bool { return late*20 > n }
 
-// The quic-load rule on an upload direction: QUIC's goodput below heldShare of
-// TCP's over the same path, with a sender loss below TCP's or above heldRatio times
-// it, means something held QUIC that did not hold TCP.
+// The quic-load rule on a direction: QUIC's goodput below heldShare of TCP's over
+// the same path, with a sender loss below TCP's or above heldRatio times it, means
+// something held QUIC that did not hold TCP. A TCP that resent nothing counts as
+// having resent one segment: its loss is below that, not known to be zero.
 const (
 	heldShare = 0.7
 	heldRatio = 5
 )
 
-// tcpUpload is what tcp-load measured in the upload direction of one phase.
-type tcpUpload struct {
-	bps       float64 // goodput, bit/s; zero when not measured
+// tcpRef is what tcp-load measured in one direction of one phase.
+type tcpRef struct {
+	bps       float64 // goodput, bit/s
 	loss      float64 // sender loss, percent
+	sent      uint64  // segments the sender loss is over
 	lossKnown bool
 }
 
-// tcpUploads collects tcp-load's upload directions per phase from checks, which
-// hold the checks run before; a phase is missing when tcp-load did not measure it.
-func tcpUploads(checks []result.Check) map[string]tcpUpload {
-	ref := make(map[string]tcpUpload)
+// tcpRefs collects tcp-load's download and upload phases by goodput metric ID from
+// checks, which hold the checks run before; one is missing when tcp-load did not measure it.
+func tcpRefs(checks []result.Check) map[string]tcpRef {
+	ref := make(map[string]tcpRef)
 	for _, c := range checks {
 		if c.ID != TCPID {
 			continue
@@ -56,17 +58,27 @@ func tcpUploads(checks []result.Check) map[string]tcpUpload {
 			return 0, false
 		}
 		for _, spec := range phases {
-			if !spec.up {
+			if spec.directions() > 1 {
 				continue
 			}
-			id := goodputIDs(spec)[len(goodputIDs(spec))-1]
+			id := goodputIDs(spec)[0]
 			if mbps, ok := get(id); ok && mbps > 0 {
 				loss, known := get(lossID(id))
-				ref[spec.name] = tcpUpload{bps: mbps * 1e6, loss: loss, lossKnown: known}
+				ref[id] = tcpRef{bps: mbps * 1e6, loss: loss, sent: samples(c, lossID(id)), lossKnown: known}
 			}
 		}
 	}
 	return ref
+}
+
+// samples is the sample count of c's metric id, or 0.
+func samples(c result.Check, id string) uint64 {
+	for _, m := range c.Metrics {
+		if m.ID == id {
+			return m.Samples
+		}
+	}
+	return 0
 }
 
 // lossID names the sender-loss metric of the direction whose goodput is id.
@@ -74,40 +86,74 @@ func lossID(goodputID string) string {
 	return strings.Replace(goodputID, ".goodput", ".sender_loss", 1)
 }
 
-// quicHeld applies the quic-load rule to direction i of p, an upload that
+// quicHeld applies the quic-load rule to p, a phase that loads one direction and
 // measured. why, when not empty, names what kept the rule from being applied: the
 // suffix of a quic_load.not_proven.quic_held_ message.
-func quicHeld(p phaseResult, i int, ref map[string]tcpUpload) (fires bool, why string, params map[string]any) {
-	d := p.dirs[i]
-	t, ok := ref[p.spec.name]
+func quicHeld(p phaseResult, ref map[string]tcpRef) (fires bool, why string, params map[string]any) {
+	d := p.dirs[0]
+	t, ok := ref[goodputIDs(p.spec)[0]]
 	switch {
 	case !d.sentKnown || d.sent == 0:
 		return false, "no_counters", nil
 	case !ok:
 		return false, "no_tcp", nil
-	case !t.lossKnown:
+	case !t.lossKnown || t.sent == 0:
 		return false, "no_counters", nil
-	case t.loss == 0:
-		return false, "tcp_lossless", nil
 	}
 	q := 100 * float64(d.resent) / float64(d.sent)
-	fires = d.finalBPS < heldShare*t.bps && (q < t.loss || q > heldRatio*t.loss)
+	tcpLoss := t.loss
+	if tcpLoss == 0 {
+		if tcpLoss = 100 / float64(t.sent); q <= heldRatio*tcpLoss {
+			return false, "tcp_lossless", nil
+		}
+	}
+	fires = d.finalBPS < heldShare*t.bps && (q < t.loss || q > heldRatio*tcpLoss)
 	return fires, "", map[string]any{"phase": p.spec.name, "quic_mbps": math.Round(d.finalBPS/1e5) / 10,
 		"tcp_mbps": math.Round(t.bps/1e5) / 10, "quic_loss": math.Round(q*100) / 100, "tcp_loss": math.Round(t.loss*100) / 100}
 }
 
+// heldDirections applies the quic-load rule to the measured phases that load one
+// direction, by direction name. Not to both at once: each direction's acknowledgements
+// queue behind the other's load there, which holds each protocol its own way.
+func heldDirections(phases []phaseResult, ref map[string]tcpRef) map[string]bool {
+	held := make(map[string]bool)
+	for _, p := range phases {
+		if p.spec.directions() == 1 && p.ran && p.stopped != stopError {
+			held[p.spec.name], _, _ = quicHeld(p, ref)
+		}
+	}
+	return held
+}
+
+// dirName names direction i of a phase, download or upload, as goodputIDs orders them.
+func dirName(spec phaseSpec, i int) string {
+	if spec.down && i == 0 {
+		return "download"
+	}
+	return "upload"
+}
+
+// goodputsOf names the goodput metrics of direction dir, one per phase that loads it.
+func goodputsOf(dir string) []string {
+	var ids []string
+	for _, s := range phases {
+		for i, id := range goodputIDs(s) {
+			if dirName(s, i) == dir {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
+}
+
 // bounded reports whether goodput of direction i of p is only a lower bound: it
-// never settled, or this host, the node or (for a quic-load upload) whatever held
-// QUIC and not TCP may have held it.
+// never settled, or this host, the node or (for quic-load) whatever held QUIC and
+// not TCP in that direction may have held it.
 func bounded(p phaseResult, i int, v validity) bool {
 	if p.lowerBound(i) || lagging(p.lagOver, p.lagTicks) || v.nodeBehind() {
 		return true
 	}
-	if v.quic && !p.dirs[i].down {
-		fires, _, _ := quicHeld(p, i, v.tcp)
-		return fires
-	}
-	return false
+	return v.quic && v.held[dirName(p.spec, i)]
 }
 
 // quantile is the metric for the nearest-rank quantile at perMille of d, or an
@@ -179,13 +225,16 @@ func (p phaseResult) anyLowerBound() bool {
 }
 
 // finish turns the phases and the probe streams into the tcp-load result, or the
-// quic-load result when q is set; ref is tcp-load's upload directions for quic-load.
-func finish(c *result.Check, phases []phaseResult, ur *echo.UDPRun, tr *echo.TCPRun, notes []result.Message, counts *protocol.LoadCounts, base idle, cfg Config, q *quicPath, ref map[string]tcpUpload) {
+// quic-load result when q is set; ref is tcp-load's phases for quic-load (tcpRefs).
+func finish(c *result.Check, phases []phaseResult, ur *echo.UDPRun, tr *echo.TCPRun, notes []result.Message, counts *protocol.LoadCounts, base idle, cfg Config, q *quicPath, ref map[string]tcpRef) {
 	var lagTicks, lagOver, slipped, slipSent uint64
 	var cpuMax float64
 	// Not one QUIC handshake while STAMP to the same node got answers.
 	blocked := q != nil && q.handshakes.Load() == 0 && ur != nil && len(ur.Stream.Arrivals) > 0
 	v := validity{node: counts, cpuMax: cfg.cpuMax, quicBlocked: blocked, quic: q != nil, tcp: ref}
+	if v.quic {
+		v.held = heldDirections(phases, ref)
+	}
 	for _, p := range phases {
 		pre := p.spec.name + "."
 		lagTicks += p.lagTicks
@@ -201,7 +250,7 @@ func finish(c *result.Check, phases []phaseResult, ur *echo.UDPRun, tr *echo.TCP
 			m := result.Mbps(id, p.dirs[i].finalBPS)
 			m.AtLeast = bounded(p, i, v)
 			c.Metrics = append(c.Metrics, m)
-			if d := p.dirs[i]; !d.down && d.sentKnown {
+			if d := p.dirs[i]; d.sentKnown {
 				c.Metrics = append(c.Metrics, result.Share(lossID(id), d.resent, d.sent))
 			}
 		}
@@ -297,7 +346,8 @@ type validity struct {
 	cpuMax            float64              // busy share of the available CPU at which this host counts as full
 	quicBlocked       bool                 // no QUIC handshake completed while UDP to the node got through
 	quic              bool                 // the check is quic-load
-	tcp               map[string]tcpUpload // quic-load: tcp-load's upload directions, by phase
+	tcp               map[string]tcpRef    // quic-load: tcp-load's download and upload phases (tcpRefs)
+	held              map[string]bool      // quic-load: directions something held apart from TCP (heldDirections)
 }
 
 // nodeBehind reports whether the node fell behind during the session.
@@ -341,9 +391,6 @@ func evaluate(c *result.Check, phases []phaseResult, v validity) {
 			c.NotProven = append(c.NotProven, msg("load.not_proven.host_cpu", map[string]any{"phase": p.spec.name, "percent": math.Round(p.cpuBusy * 100)}, "cpu.busy_max"))
 		}
 	}
-	if v.quic {
-		c.NotProven = append(c.NotProven, msg("quic_load.not_proven.quic_held_download", nil))
-	}
 	if len(invalid) > 0 {
 		c.Status = result.Invalid
 		c.Warnings = append(c.Warnings, invalid...)
@@ -383,19 +430,15 @@ func evaluate(c *result.Check, phases []phaseResult, v validity) {
 		if lagging(p.lagOver, p.lagTicks) {
 			warn("load.inference.host_limited", map[string]any{"phase": name, "count": p.lagOver, "ticks": p.lagTicks}, append([]string{"lag.over_10ms"}, goodputIDs(p.spec)...)...)
 		}
-		if !v.quic {
-			continue
+		if !v.quic || p.spec.directions() > 1 {
+			continue // both directions at once follow the phases of one (heldDirections)
 		}
-		for i, id := range goodputIDs(p.spec) {
-			if p.dirs[i].down {
-				continue
-			}
-			switch fires, why, params := quicHeld(p, i, v.tcp); {
-			case fires:
-				warn("quic_load.inference.quic_held", params, id, lossID(id))
-			case why != "":
-				c.NotProven = append(c.NotProven, msg("quic_load.not_proven.quic_held_"+why, map[string]any{"phase": name}))
-			}
+		switch fires, why, params := quicHeld(p, v.tcp); {
+		case fires:
+			id := goodputIDs(p.spec)[0]
+			warn("quic_load.inference.quic_held", params, append(goodputsOf(name), lossID(id))...)
+		case why != "":
+			c.NotProven = append(c.NotProven, msg("quic_load.not_proven.quic_held_"+why, map[string]any{"phase": name}))
 		}
 	}
 	if v.nodeBehind() {

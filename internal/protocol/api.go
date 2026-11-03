@@ -26,6 +26,28 @@ const (
 // LoadPath is the path of a load endpoint of the session with the given ID.
 func LoadPath(sessionID, endpoint string) string { return PathSessions + "/" + sessionID + endpoint }
 
+// LoadPhase is the query parameter that names a LoadLarge request's phase: the node
+// adds what the download's connection sent to that phase's SenderCounts. A name is
+// 1 to MaxPhaseName lowercase letters; a session's first MaxPhases names count.
+const (
+	LoadPhase    = "phase"
+	MaxPhaseName = 16
+	MaxPhases    = 4
+)
+
+// ValidPhase reports whether name may name a phase.
+func ValidPhase(name string) bool {
+	if name == "" || len(name) > MaxPhaseName {
+		return false
+	}
+	for _, c := range []byte(name) {
+		if c < 'a' || c > 'z' {
+			return false
+		}
+	}
+	return true
+}
+
 // MaxBody bounds every control-plane request and response body.
 const MaxBody = 4096
 
@@ -216,11 +238,21 @@ func (g *LoadGrant) validate() error {
 // LoadCounts are what the node saw of a session's load: body bytes it sent and
 // received on the load endpoints, and how many times its 10 ms timer woke during
 // the session (LagTicks) and woke more than 10 ms late (LagOver).
+// Download holds, by phase, what the node's downloads sent as SenderCounts.
 type LoadCounts struct {
-	Sent     uint64 `json:"sent"`
-	Received uint64 `json:"received"`
-	LagTicks uint64 `json:"lag_ticks"`
-	LagOver  uint64 `json:"lag_over"`
+	Sent     uint64                  `json:"sent"`
+	Received uint64                  `json:"received"`
+	LagTicks uint64                  `json:"lag_ticks"`
+	LagOver  uint64                  `json:"lag_over"`
+	Download map[string]SenderCounts `json:"download,omitempty"`
+}
+
+// SenderCounts are what one phase's download connections sent and sent again,
+// summed when each download ends: TCP data segments (Linux) or packets (macOS) as
+// the kernel counts them, or QUIC packets sent and declared lost.
+type SenderCounts struct {
+	Sent   uint64 `json:"sent"`
+	Resent uint64 `json:"resent"`
 }
 
 // StampGrant identifies a session's STAMP packets (RFC 8972 SSID); never 0.
@@ -292,8 +324,21 @@ type SessionEnd struct {
 }
 
 func (r *SessionEnd) Validate() error {
-	if r.Load != nil && r.Load.LagOver > r.Load.LagTicks {
-		return errors.New("load: lag_over above lag_ticks")
+	if l := r.Load; l != nil {
+		if l.LagOver > l.LagTicks {
+			return errors.New("load: lag_over above lag_ticks")
+		}
+		if len(l.Download) > MaxPhases {
+			return errors.New("load: too many download phases")
+		}
+		for name, c := range l.Download {
+			switch {
+			case !ValidPhase(name):
+				return errors.New("load: bad download phase name")
+			case c.Resent > c.Sent:
+				return errors.New("load: download resent above sent")
+			}
+		}
 	}
 	return r.Node.validate()
 }

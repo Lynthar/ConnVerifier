@@ -30,21 +30,64 @@ func with(f func(*phaseResult)) []phaseResult {
 	return p
 }
 
-// quicUploads are clean quic-load phases whose upload directions moved mbps with
-// sender loss lossPct, against a tcp-load reference of 100 Mbit/s at 0.5% loss in
-// both phases with an upload.
-func quicUploads(mbps, lossPct float64) ([]phaseResult, validity) {
+// quicLoads are clean quic-load phases whose download directions (down) or upload
+// directions moved mbps with sender loss lossPct and the others as TCP did, against
+// a tcp-load reference of 100 Mbit/s at tcpLoss percent in every direction.
+func quicLoads(down bool, mbps, lossPct, tcpLoss float64) ([]phaseResult, validity) {
 	p := clean()
 	for i := range p {
-		if p[i].spec.down {
-			p[i].dirs = append(p[i].dirs, &direction{down: true, finalBPS: 400e6})
-		}
-		if p[i].spec.up {
-			p[i].dirs = append(p[i].dirs, &direction{finalBPS: mbps * 1e6, sent: 100_000, resent: uint64(lossPct * 1000), sentKnown: true})
+		for _, d := range []bool{true, false} {
+			if (d && !p[i].spec.down) || (!d && !p[i].spec.up) {
+				continue
+			}
+			bps, loss := 100e6, tcpLoss
+			if d == down {
+				bps, loss = mbps*1e6, lossPct
+			}
+			p[i].dirs = append(p[i].dirs, &direction{down: d, finalBPS: bps, sent: 100_000, resent: uint64(loss * 1000), sentKnown: true})
 		}
 	}
-	ref := map[string]tcpUpload{"upload": {bps: 100e6, loss: 0.5, lossKnown: true}, "bidirectional": {bps: 100e6, loss: 0.5, lossKnown: true}}
+	ref := map[string]tcpRef{}
+	for _, spec := range phases {
+		for _, id := range goodputIDs(spec) {
+			ref[id] = tcpRef{bps: 100e6, loss: tcpLoss, sent: 100_000, lossKnown: true}
+		}
+	}
 	return p, validity{slipSent: 1000, node: &protocol.LoadCounts{LagTicks: 1000}, cpuMax: 0.875, quic: true, tcp: ref}
+}
+
+// quicUploads is quicLoads for the uploads against TCP's 0.5%.
+func quicUploads(mbps, lossPct float64) ([]phaseResult, validity) {
+	return quicLoads(false, mbps, lossPct, 0.5)
+}
+
+// bidirectionalHeld is quicLoads(true, 60, 5, 0.5) with the download phase as TCP's:
+// only the download of both directions at once meets the rule.
+func bidirectionalHeld() []phaseResult {
+	p, _ := quicLoads(true, 60, 5, 0.5)
+	p[0].dirs[0] = &direction{down: true, finalBPS: 100e6, sent: 100_000, resent: 500, sentKnown: true}
+	return p
+}
+
+func TestHeldDirectionBoundsBothAtOnce(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		phases []phaseResult
+		want   []bool // bounded: download, upload of both directions at once
+	}{
+		{"held alone", func() []phaseResult { p, _ := quicLoads(true, 60, 5, 0.5); return p }(), []bool{true, false}},
+		{"held only with both at once", bidirectionalHeld(), []bool{false, false}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, v := quicLoads(true, 60, 5, 0.5)
+			v.held = heldDirections(tt.phases, v.tcp)
+			for i, want := range tt.want {
+				if got := bounded(tt.phases[2], i, v); got != want {
+					t.Errorf("direction %d bounded %v, want %v", i, got, want)
+				}
+			}
+		})
+	}
 }
 
 // Rows follow the "Status rules" tables of docs/methods/tcp-load.md and
@@ -94,8 +137,11 @@ func TestStatusRules(t *testing.T) {
 		{"QUIC losing five times more is the path's", func() []phaseResult { p, _ := quicUploads(60, 2.5); return p }(), func() validity { _, v := quicUploads(60, 2.5); return v }(), result.Pass, ""},
 		{"3 something held QUIC, not TCP: less loss", func() []phaseResult { p, _ := quicUploads(60, 0.4); return p }(), func() validity { _, v := quicUploads(60, 0.4); return v }(), result.Warn, "quic_load.inference.quic_held"},
 		{"QUIC losing as much as TCP is the path's", func() []phaseResult { p, _ := quicUploads(60, 0.5); return p }(), func() validity { _, v := quicUploads(60, 0.5); return v }(), result.Pass, ""},
-		{"no TCP reference is noted", func() []phaseResult { p, _ := quicUploads(60, 5); return p }(), validity{slipSent: 1000, cpuMax: 0.875, quic: true, tcp: map[string]tcpUpload{}}, result.Pass, "quic_load.not_proven.quic_held_no_tcp"},
-		{"lossless TCP is no reference", func() []phaseResult { p, _ := quicUploads(60, 5); return p }(), validity{slipSent: 1000, cpuMax: 0.875, quic: true, tcp: map[string]tcpUpload{"upload": {bps: 100e6, lossKnown: true}, "bidirectional": {bps: 100e6, lossKnown: true}}}, result.Pass, "quic_load.not_proven.quic_held_tcp_lossless"},
+		{"3 something held a QUIC download, not TCP", func() []phaseResult { p, _ := quicLoads(true, 60, 5, 0.5); return p }(), func() validity { _, v := quicLoads(true, 60, 5, 0.5); return v }(), result.Warn, "quic_load.inference.quic_held"},
+		{"3 something held QUIC, not TCP: six segments against lossless TCP", func() []phaseResult { p, _ := quicLoads(true, 60, 0.006, 0); return p }(), func() validity { _, v := quicLoads(true, 60, 0.006, 0); return v }(), result.Warn, "quic_load.inference.quic_held"},
+		{"both directions at once are not judged on their own", bidirectionalHeld(), func() validity { _, v := quicLoads(true, 60, 5, 0.5); return v }(), result.Pass, ""},
+		{"five segments against lossless TCP are noted", func() []phaseResult { p, _ := quicLoads(true, 60, 0.005, 0); return p }(), func() validity { _, v := quicLoads(true, 60, 0.005, 0); return v }(), result.Pass, "quic_load.not_proven.quic_held_tcp_lossless"},
+		{"no TCP reference is noted", func() []phaseResult { p, _ := quicUploads(60, 5); return p }(), validity{slipSent: 1000, cpuMax: 0.875, quic: true, tcp: map[string]tcpRef{}}, result.Pass, "quic_load.not_proven.quic_held_no_tcp"},
 		{"no sender counters is noted", func() []phaseResult {
 			p, _ := quicUploads(60, 5)
 			for i := range p {
@@ -105,7 +151,6 @@ func TestStatusRules(t *testing.T) {
 			}
 			return p
 		}(), func() validity { _, v := quicUploads(60, 5); return v }(), result.Pass, "quic_load.not_proven.quic_held_no_counters"},
-		{"quic-load notes the download is not judged", func() []phaseResult { p, _ := quicUploads(100, 0.5); return p }(), func() validity { _, v := quicUploads(100, 0.5); return v }(), result.Pass, "quic_load.not_proven.quic_held_download"},
 		{"a capped phase that settled is valid", with(func(p *phaseResult) { p.capped = true }), valid, result.Pass, ""},
 		{"a capped phase that settled and then swung is valid", with(func(p *phaseResult) { p.capped, p.gpConf, p.unsteady = true, []int{result.Medium}, []bool{true} }), valid, result.Warn, "load.inference.goodput_unsteady"},
 		{"5% late wake-ups are still valid", with(func(p *phaseResult) { p.lagOver = 50 }), valid, result.Pass, ""},

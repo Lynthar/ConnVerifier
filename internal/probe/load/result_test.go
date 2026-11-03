@@ -38,7 +38,7 @@ func syntheticPhases() []phaseResult {
 	down, up := settled(phases[0]), settled(phases[1])
 	both := settled(phases[2])
 	down.start, down.settledAt, down.end = at(0), at(8), at(12)
-	down.dirs = []*direction{{down: true, finalBPS: 93.456e6}}
+	down.dirs = []*direction{{down: true, finalBPS: 93.456e6, sent: 9_800_000, resent: 19_600, sentKnown: true}}
 	down.conns, down.bytes = 12, 131_234_567
 	down.rpm = responsiveness{rpm: 812.4, foreign: 1100.2, loaded: 524.6, samples: 160, ok: true}
 	down.self, down.foreign = durations(110*time.Millisecond, 3*time.Millisecond, 80), durations(65*time.Millisecond, 2*time.Millisecond, 80)
@@ -49,7 +49,7 @@ func syntheticPhases() []phaseResult {
 	up.self, up.foreign = durations(230*time.Millisecond, 5*time.Millisecond, 100), durations(95*time.Millisecond, 3*time.Millisecond, 100)
 	both.start, both.settledAt, both.end = at(28), at(37), at(48)
 	both.stopped, both.rpmConf = stopTime, result.Medium
-	both.dirs = []*direction{{down: true, finalBPS: 71.002e6}, {finalBPS: 18.204e6, sent: 2_900_000, resent: 8_700, sentKnown: true}}
+	both.dirs = []*direction{{down: true, finalBPS: 71.002e6, sent: 7_400_000, resent: 22_200, sentKnown: true}, {finalBPS: 18.204e6, sent: 2_900_000, resent: 8_700, sentKnown: true}}
 	both.conns, both.bytes = 26, 245_678_901
 	both.rpm = responsiveness{rpm: 247.9, foreign: 330.5, loaded: 165.3, samples: 220, ok: true}
 	both.self, both.foreign = durations(330*time.Millisecond, 8*time.Millisecond, 110), durations(160*time.Millisecond, 4*time.Millisecond, 110)
@@ -84,7 +84,8 @@ func fillStream(s *echo.Stream, p []phaseResult) {
 
 // goldenCheck is a made-up tcp-load, or with quic a quic-load whose sockets got
 // Linux's default UDP buffers, compared with a tcp-load that moved twice its upload
-// at a twentieth of its loss and did not measure both directions.
+// at a twentieth of its loss, downloaded about twice as fast resending nothing, and
+// did not measure both directions.
 func goldenCheck(quic bool) result.Check {
 	cfg := Config{interval: time.Second, phaseTime: 20 * time.Second, dirMB: 500, rate: 50, slipLimit: echo.DefaultSlipLimit, cpuMax: 0.875}
 	ph := syntheticPhases()
@@ -112,12 +113,12 @@ func goldenCheck(quic bool) result.Check {
 	base := idle{udpP50: 31.2, udpP95: 35.4, tcpP50: 31.5, tcpP95: 36.1}
 	var q *quicPath
 	var notes []result.Message
-	var ref map[string]tcpUpload
+	var ref map[string]tcpRef
 	if quic {
 		q = &quicPath{recv: 425_984, send: 425_984}
 		q.handshakes.Store(48)
 		notes = bufferFacts(&c, q)
-		ref = map[string]tcpUpload{"upload": {bps: 40e6, loss: 0.25, lossKnown: true}}
+		ref = map[string]tcpRef{"upload.goodput": {bps: 40e6, loss: 0.25, sent: 2_000_000, lossKnown: true}, "download.goodput": {bps: 200e6, sent: 9_000_000, lossKnown: true}}
 	}
 	finish(&c, ph, ur, tr, notes, &protocol.LoadCounts{LagTicks: 5200, LagOver: 3}, base, cfg, q, ref)
 	return c
@@ -181,12 +182,13 @@ func TestIdleFromBaselineResult(t *testing.T) {
 	}
 }
 
-// quic-load finds tcp-load's uploads, with their sender loss, in tcp-load's result.
-func TestTCPUploadsFromTCPLoad(t *testing.T) {
-	ref := tcpUploads([]result.Check{goldenCheck(false)})
-	for _, phase := range []string{"upload", "bidirectional"} {
-		if u, ok := ref[phase]; !ok || u.bps <= 0 || !u.lossKnown {
-			t.Errorf("tcpUploads(golden tcp-load)[%q] = %+v, %v; want goodput and sender loss", phase, u, ok)
+// quic-load finds every direction of tcp-load, with its sender loss, in tcp-load's
+// result.
+func TestTCPRefsFromTCPLoad(t *testing.T) {
+	ref := tcpRefs([]result.Check{goldenCheck(false)})
+	for _, id := range []string{"download.goodput", "upload.goodput"} {
+		if u, ok := ref[id]; !ok || u.bps <= 0 || !u.lossKnown || u.sent == 0 {
+			t.Errorf("tcpRefs(golden tcp-load)[%q] = %+v, %v; want goodput and sender loss", id, u, ok)
 		}
 	}
 }

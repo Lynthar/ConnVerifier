@@ -108,7 +108,8 @@ packets the reflector answered, and those it dropped for exceeding the granted
 rate or for coming from another source address. A session that had a load grant
 also gets `"load": {"sent": N, "received": N, "lag_ticks": N, "lag_over": N}`: the
 body bytes the load endpoints sent and received, and how often the node's 10 ms
-timer woke during the session and woke more than 10 ms late.
+timer woke during the session and woke more than 10 ms late; and, once a download
+named its phase, `"download": {"<phase>": {"sent": N, "resent": N}}` (below).
 
 ### Load endpoints
 
@@ -120,7 +121,7 @@ control plane's per-address request limit; failed ones are.
 | Request | Answer |
 |---|---|
 | `GET …/load/small` | `200`, one byte, `application/octet-stream`; at most 200 a second per session |
-| `GET …/load/large` | `200`, `application/octet-stream`, sent until the session's load budget is spent, then ended normally |
+| `GET …/load/large` | `200`, `application/octet-stream`, sent until the session's load budget is spent, then ended normally. With `?phase=<name>` (1 to 16 lowercase letters), what the request's connection sent and sent again is added to that phase's counts when the response ends: TCP data segments as Linux counts them or packets as macOS does, nothing elsewhere; QUIC packets sent and declared lost. A session's first 4 names are counted |
 | `POST …/load/upload` | `200` at once; the body is read and discarded, and the response carries 8-byte big-endian totals of body bytes read so far — one at once, then one at least every 50 ms while reading, and a last one when the body ends. Once the budget is spent the node stops reading and the response ends before the body does |
 
 Every body byte in either direction counts against `load_bytes`. The node serves

@@ -24,6 +24,7 @@ Reported by the node
   Load at end: sessions 0 · connections 0/20000
 Observed
   Download · Goodput: 93.5 Mbit/s
+  Download · Sender loss (share declared lost or resent): 0.2% (9800000 samples)
   Download · Goodput confidence: high
   Download · Load connections: 12
   Download · Load connections that did not open: 0
@@ -72,6 +73,7 @@ Observed
   Upload · TCP round trip p50, above idle: 138 ms (248 samples)
   Upload · TCP round trip p95, above idle: 154 ms (248 samples)
   Both directions · Goodput, download: 71 Mbit/s
+  Both directions · Sender loss, download: 0.3% (7400000 samples)
   Both directions · Goodput, upload: 18.2 Mbit/s
   Both directions · Sender loss, upload: 0.3% (2900000 samples)
   Both directions · Goodput confidence: high
@@ -139,7 +141,8 @@ Reported by the node
 Observed
   Host UDP receive buffer: 426 kB
   Host UDP send buffer: 426 kB
-  Download · Goodput: 93.5 Mbit/s
+  Download · Goodput: ≥ 93.5 Mbit/s
+  Download · Sender loss (share declared lost or resent): 0.2% (9800000 samples)
   Download · Goodput confidence: high
   Download · Load connections: 12
   Download · Load connections that did not open: 0
@@ -187,8 +190,9 @@ Observed
   Upload · TCP round trip p99: 190 ms (248 samples)
   Upload · TCP round trip p50, above idle: 138 ms (248 samples)
   Upload · TCP round trip p95, above idle: 154 ms (248 samples)
-  Both directions · Goodput, download: 71 Mbit/s
-  Both directions · Goodput, upload: 18.2 Mbit/s
+  Both directions · Goodput, download: ≥ 71 Mbit/s
+  Both directions · Sender loss, download: 0.3% (7400000 samples)
+  Both directions · Goodput, upload: ≥ 18.2 Mbit/s
   Both directions · Sender loss, upload: 0.3% (2900000 samples)
   Both directions · Goodput confidence: high
   Both directions · Load connections: 26
@@ -218,7 +222,8 @@ Observed
   Probes sent more than 10 ms late: 0
   CPU this process used, of what it may use, in the busiest phase: 51%
 Inferred
-  - Upload: over the same path TCP reached 40 Mbit/s with sender loss 0.25%, QUIC 19.9 Mbit/s with sender loss 5%: under 0.7 of TCP's goodput, with a loss out of line with TCP's (below it, or above 5 times it). Something held QUIC that did not hold TCP: this host's QUIC sending (implementation, congestion control, network adapter) or the path treating UDP apart (a rate or burst limit); which one was not determined. QUIC's goodput is a lower bound.
+  - Download: over the same path TCP reached 200 Mbit/s with sender loss 0%, QUIC 93.5 Mbit/s with sender loss 0.2%: under 0.7 of TCP's goodput, with a loss out of line with TCP's (below it, or above 5 times it; a TCP that resent nothing counts as one resent segment). Something held QUIC that did not hold TCP: QUIC at one end (implementation, congestion control, network adapter, the receiving host's UDP path) or the path treating UDP apart (a rate or burst limit); which one was not determined. QUIC's goodput in this direction is a lower bound, here and with both directions at once.
+  - Upload: over the same path TCP reached 40 Mbit/s with sender loss 0.25%, QUIC 19.9 Mbit/s with sender loss 5%: under 0.7 of TCP's goodput, with a loss out of line with TCP's (below it, or above 5 times it; a TCP that resent nothing counts as one resent segment). Something held QUIC that did not hold TCP: QUIC at one end (implementation, congestion control, network adapter, the receiving host's UDP path) or the path treating UDP apart (a rate or burst limit); which one was not determined. QUIC's goodput in this direction is a lower bound, here and with both directions at once.
   - Both directions: 2 load connections did not open within 15 s; the phase went on with the rest. With the path loaded, even opening a connection was this slow.
   - Both directions: responsiveness did not settle and may not reflect the full queue.
   - Both directions: responsiveness 248 RPM, below 300 — round trips above 200 ms while the path is loaded, which the draft calls poor.
@@ -228,5 +233,3 @@ Not proven
   - Where the bottleneck is — this connection, the networks between, or the node's own uplink — is not determined.
   - Other traffic on this host or network during the run was not checked; it shares the bottleneck with the load.
   - This host's UDP buffers (see the two observations) are below the 7 MiB quic-go asks for; on a fast or long path QUIC may drop packets on this host and goodput read low. On Linux, raise net.core.rmem_max and net.core.wmem_max with sysctl.
-  - The node sends the download, so whether something held the QUIC download that did not hold TCP was not determined.
-  - Both directions: tcp-load in the same check did not measure this upload, so whether something held the QUIC upload that did not hold TCP was not determined.

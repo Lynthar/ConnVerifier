@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
@@ -15,6 +16,7 @@ import (
 	"github.com/Lynthar/ConnVerifier/internal/netenv"
 	"github.com/Lynthar/ConnVerifier/internal/netx"
 	"github.com/Lynthar/ConnVerifier/internal/protocol"
+	"github.com/quic-go/quic-go"
 )
 
 const (
@@ -40,8 +42,12 @@ const (
 	minLowat   = 4 << 10
 )
 
-// connKey holds the connection a request arrived on, for socket options.
-type connKey struct{}
+// connKey holds the connection a request arrived on, for socket options;
+// quicConnKey the QUIC connection an HTTP/3 request arrived on.
+type (
+	connKey     struct{}
+	quicConnKey struct{}
+)
 
 // socketOf returns the TCP connection under a request's TLS, or nil.
 func socketOf(r *http.Request) net.Conn {
@@ -54,6 +60,19 @@ func socketOf(r *http.Request) net.Conn {
 		return pc.Conn
 	}
 	return c
+}
+
+// sentBy reports what the connection under r has sent and sent again: TCP data
+// segments as its kernel counts them, or QUIC packets sent and declared lost.
+func sentBy(r *http.Request) (sent, resent uint64, ok bool) {
+	if c, isQUIC := r.Context().Value(quicConnKey{}).(*quic.Conn); isQUIC {
+		st := c.ConnectionStats()
+		return st.PacketsSent, st.PacketsLost, true
+	}
+	if sock := socketOf(r); sock != nil {
+		return netx.TCPSent(sock)
+	}
+	return 0, 0, false
 }
 
 var zeros = make([]byte, loadChunk)
@@ -74,6 +93,8 @@ type loadState struct {
 	ended          chan struct{}
 	once           sync.Once
 	counts         protocol.LoadCounts
+	sendersMu      sync.Mutex
+	senders        map[string]protocol.SenderCounts // downloads' connections, by phase
 }
 
 func newLoadState(ip netip.Addr, quic bool, granted int64, conns int, day, now time.Time) *loadState {
@@ -84,7 +105,20 @@ func newLoadState(ip netip.Addr, quic bool, granted int64, conns int, day, now t
 		ended: make(chan struct{}),
 	}
 	l.remaining.Store(granted)
+	l.senders = make(map[string]protocol.SenderCounts)
 	return l
+}
+
+// addSender adds what a finished download's connection sent to its phase; past a
+// session's first protocol.MaxPhases phase names, a new one is not counted.
+func (l *loadState) addSender(phase string, sent, resent uint64) {
+	l.sendersMu.Lock()
+	defer l.sendersMu.Unlock()
+	c, known := l.senders[phase]
+	if !known && len(l.senders) >= protocol.MaxPhases {
+		return
+	}
+	l.senders[phase] = protocol.SenderCounts{Sent: c.Sent + sent, Resent: c.Resent + resent}
 }
 
 // take reserves up to n bytes of the budget and returns how many it got.
@@ -116,6 +150,11 @@ func (l *loadState) finish() protocol.LoadCounts {
 		ticks, over := l.lag.Stop()
 		close(l.ended)
 		l.counts = protocol.LoadCounts{Sent: l.sent.Load(), Received: l.received.Load(), LagTicks: ticks, LagOver: over}
+		l.sendersMu.Lock()
+		if len(l.senders) > 0 {
+			l.counts.Download = maps.Clone(l.senders)
+		}
+		l.sendersMu.Unlock()
 	})
 	return l.counts
 }
@@ -183,13 +222,32 @@ func (s *server) loadSmall(w http.ResponseWriter, r *http.Request) {
 }
 
 // loadLarge sends until the session's budget is spent, then ends the response
-// normally, so the client can tell a spent budget from a failure.
+// normally, so the client can tell a spent budget from a failure. A request that
+// names its phase adds, as it ends, what its connection sent to that phase.
 func (s *server) loadLarge(w http.ResponseWriter, r *http.Request) {
 	sess, ok := s.loadSession(w, r)
 	if !ok {
 		return
 	}
 	ld := sess.load
+	// The counts are read every second as well: once the client has closed, the
+	// socket may be gone before the handler returns.
+	phase := r.URL.Query().Get(protocol.LoadPhase)
+	counted := protocol.ValidPhase(phase)
+	var sent, resent uint64
+	var known bool
+	sample := func() {
+		if s, rs, ok := sentBy(r); ok {
+			sent, resent, known = s, rs, true
+		}
+	}
+	if counted {
+		defer func() {
+			if sample(); known {
+				ld.addSender(phase, sent, resent)
+			}
+		}()
+	}
 	outliveTimeouts(w, sess)
 	sock := socketOf(r)
 	if sock != nil {
@@ -199,9 +257,14 @@ func (s *server) loadLarge(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	mark, marked := time.Now(), 0
 	for {
-		if sock != nil && time.Since(mark) >= lowatEvery {
-			bps := float64(marked) / time.Since(mark).Seconds()
-			netx.SetNotSentLowat(sock, max(int(bps*lowatTime.Seconds()), minLowat))
+		if time.Since(mark) >= lowatEvery {
+			if sock != nil {
+				bps := float64(marked) / time.Since(mark).Seconds()
+				netx.SetNotSentLowat(sock, max(int(bps*lowatTime.Seconds()), minLowat))
+			}
+			if counted {
+				sample()
+			}
 			mark, marked = time.Now(), 0
 		}
 		select {

@@ -222,6 +222,7 @@
   "metric.udp.loss": "UDP loss",
   "metric.sender_loss": "Sender loss (share declared lost or resent)",
   "metric.sender_loss.upload": "Sender loss, upload",
+  "metric.sender_loss.download": "Sender loss, download",
   "metric.udp.rtt.p50.increase": "UDP round trip p50, above idle",
   "metric.udp.rtt.p95.increase": "UDP round trip p95, above idle",
   "metric.tcp.rtt.p50": "TCP round trip p50",
@@ -273,9 +274,8 @@
   "quic_load.error.address": "Could not work out the node's QUIC address: {error}",
   "quic_load.inference.blocked": "UDP reaches the node, yet every QUIC handshake failed: something on the path may recognize and block QUIC, or the node's QUIC port is not open.",
   "quic_load.not_proven.udp_buffer": "This host's UDP buffers (see the two observations) are below the {wanted_mib} MiB quic-go asks for; on a fast or long path QUIC may drop packets on this host and goodput read low. On Linux, raise net.core.rmem_max and net.core.wmem_max with sysctl.",
-  "quic_load.inference.quic_held": "{phase}: over the same path TCP reached {tcp_mbps} Mbit/s with sender loss {tcp_loss}%, QUIC {quic_mbps} Mbit/s with sender loss {quic_loss}%: under 0.7 of TCP's goodput, with a loss out of line with TCP's (below it, or above 5 times it). Something held QUIC that did not hold TCP: this host's QUIC sending (implementation, congestion control, network adapter) or the path treating UDP apart (a rate or burst limit); which one was not determined. QUIC's goodput is a lower bound.",
-  "quic_load.not_proven.quic_held_no_counters": "{phase}: this platform does not report sender loss, so whether something held the QUIC upload that did not hold TCP was not determined.",
-  "quic_load.not_proven.quic_held_no_tcp": "{phase}: tcp-load in the same check did not measure this upload, so whether something held the QUIC upload that did not hold TCP was not determined.",
-  "quic_load.not_proven.quic_held_tcp_lossless": "{phase}: the TCP upload resent nothing, which leaves no reference, so whether something held the QUIC upload that did not hold TCP was not determined.",
-  "quic_load.not_proven.quic_held_download": "The node sends the download, so whether something held the QUIC download that did not hold TCP was not determined."
+  "quic_load.inference.quic_held": "{phase}: over the same path TCP reached {tcp_mbps} Mbit/s with sender loss {tcp_loss}%, QUIC {quic_mbps} Mbit/s with sender loss {quic_loss}%: under 0.7 of TCP's goodput, with a loss out of line with TCP's (below it, or above 5 times it; a TCP that resent nothing counts as one resent segment). Something held QUIC that did not hold TCP: QUIC at one end (implementation, congestion control, network adapter, the receiving host's UDP path) or the path treating UDP apart (a rate or burst limit); which one was not determined. QUIC's goodput in this direction is a lower bound, here and with both directions at once.",
+  "quic_load.not_proven.quic_held_no_counters": "{phase}: the sender loss of both loads was not reported (by this host's platform for an upload, by the node for a download), so whether something held QUIC that did not hold TCP was not determined.",
+  "quic_load.not_proven.quic_held_no_tcp": "{phase}: tcp-load in the same check did not measure this direction, so whether something held QUIC that did not hold TCP was not determined.",
+  "quic_load.not_proven.quic_held_tcp_lossless": "{phase}: TCP resent nothing and QUIC lost no more than 5 times one TCP segment's share, which leaves no loss to tell them apart, so whether something held QUIC that did not hold TCP was not determined."
 }

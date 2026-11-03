@@ -334,12 +334,31 @@ func run(ctx context.Context, cfg Config, version string, earlier []result.Check
 	if t.quic != nil {
 		probes.notes = append(probes.notes, bufferFacts(&c, t.quic)...)
 	}
-	var ref map[string]tcpUpload
+	if counts != nil {
+		senders(results, counts.Download)
+	}
+	var ref map[string]tcpRef
 	if quic {
-		ref = tcpUploads(earlier)
+		ref = tcpRefs(earlier)
 	}
 	finish(&c, results, ur, tr, probes.notes, counts, base, cfg, t.quic, ref)
 	return c, nil
+}
+
+// senders gives each phase's download what the node reported its connections of
+// that phase sent and sent again.
+func senders(results []phaseResult, by map[string]protocol.SenderCounts) {
+	for _, r := range results {
+		c, ok := by[r.spec.name]
+		if !ok {
+			continue
+		}
+		for _, d := range r.dirs {
+			if d.down {
+				d.sent, d.resent, d.sentKnown = c.Sent, c.Resent, true
+			}
+		}
+	}
 }
 
 // quicPathOf is the node's HTTP/3 port on the host of addr, the address the

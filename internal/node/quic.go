@@ -64,7 +64,10 @@ func (s *server) serveQUIC(ctx context.Context, pc net.PacketConn) {
 	if err != nil {
 		return
 	}
-	hs := &http3.Server{Handler: s.loadRoutes(), IdleTimeout: time.Minute, MaxHeaderBytes: 8 << 10}
+	hs := &http3.Server{Handler: s.loadRoutes(), IdleTimeout: time.Minute, MaxHeaderBytes: 8 << 10,
+		ConnContext: func(ctx context.Context, c *quic.Conn) context.Context {
+			return context.WithValue(ctx, quicConnKey{}, c)
+		}}
 	stopped := make(chan struct{})
 	go func() {
 		select {

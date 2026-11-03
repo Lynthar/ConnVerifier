@@ -222,6 +222,7 @@
   "metric.udp.loss": "UDP 丢包率",
   "metric.sender_loss": "发送端丢包率（被判丢失或重传的占比）",
   "metric.sender_loss.upload": "发送端丢包率（上行）",
+  "metric.sender_loss.download": "发送端丢包率（下行）",
   "metric.udp.rtt.p50.increase": "UDP 往返时延 p50 比空闲时高出",
   "metric.udp.rtt.p95.increase": "UDP 往返时延 p95 比空闲时高出",
   "metric.tcp.rtt.p50": "TCP 往返时延 p50",
@@ -273,9 +274,8 @@
   "quic_load.error.address": "算不出节点的 QUIC 地址：{error}",
   "quic_load.inference.blocked": "到节点的 UDP 通，QUIC 握手却全部失败：路径上可能有设备识别并拦截了 QUIC，或节点的 QUIC 端口没有放行。",
   "quic_load.not_proven.udp_buffer": "本机 UDP 缓冲（见观测里的两项）小于 quic-go 要的 {wanted_mib} MiB；高速或长往返时 QUIC 可能在本机丢包，goodput 偏低。Linux 上可用 sysctl 调大 net.core.rmem_max 与 net.core.wmem_max。",
-  "quic_load.inference.quic_held": "{phase}：同一条路径上，TCP 跑到 {tcp_mbps} Mbit/s、发送端丢包率 {tcp_loss}%；QUIC 只有 {quic_mbps} Mbit/s、丢包率 {quic_loss}%：goodput 不到 TCP 的七成，丢包率与 TCP 不相称（低于 TCP，或超过它的 5 倍）。限住 QUIC 的是 TCP 没碰到的东西：本机的 QUIC 发送路径（实现、拥塞控制、网卡），或路径对 UDP 的另外处理（限速、突发限制），没有判定是哪一个。QUIC 的 goodput 只是下限。",
-  "quic_load.not_proven.quic_held_no_counters": "{phase}：本平台读不到发送端的丢包计数，没有判定 QUIC 上行是不是被 TCP 没碰到的东西限住。",
-  "quic_load.not_proven.quic_held_no_tcp": "{phase}：同一次检查里 tcp-load 没测到这一阶段的上行，没有判定 QUIC 上行是不是被 TCP 没碰到的东西限住。",
-  "quic_load.not_proven.quic_held_tcp_lossless": "{phase}：TCP 上行一次重传都没有，缺少参照，没有判定 QUIC 上行是不是被 TCP 没碰到的东西限住。",
-  "quic_load.not_proven.quic_held_download": "下行的发送端在节点，QUIC 下行是不是被 TCP 没碰到的东西限住，没有判定。"
+  "quic_load.inference.quic_held": "{phase}：同一条路径上，TCP 跑到 {tcp_mbps} Mbit/s、发送端丢包率 {tcp_loss}%；QUIC 只有 {quic_mbps} Mbit/s、丢包率 {quic_loss}%：goodput 不到 TCP 的七成，丢包率与 TCP 不相称（低于 TCP，或超过它的 5 倍；TCP 一次没重传按重传了一段算）。限住 QUIC 的是 TCP 没碰到的东西：某一端的 QUIC（实现、拥塞控制、网卡、收包一端的 UDP 路径），或路径对 UDP 的另外处理（限速、突发限制），没有判定是哪一个。这个方向上 QUIC 的 goodput 只是下限，双向阶段里也是。",
+  "quic_load.not_proven.quic_held_no_counters": "{phase}：两种负载的发送端丢包没有都报上来（上行看本机平台，下行看节点），没有判定 QUIC 是不是被 TCP 没碰到的东西限住。",
+  "quic_load.not_proven.quic_held_no_tcp": "{phase}：同一次检查里 tcp-load 没测到这个方向，没有判定 QUIC 是不是被 TCP 没碰到的东西限住。",
+  "quic_load.not_proven.quic_held_tcp_lossless": "{phase}：TCP 一次重传都没有，QUIC 的丢包也不超过 TCP 一段所占比例的 5 倍，没有丢包可作区分，没有判定 QUIC 是不是被 TCP 没碰到的东西限住。"
 }

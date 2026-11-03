@@ -574,13 +574,15 @@ func TestL8NodeBudget(t *testing.T) {
 // L9: a bloated, lossy uplink like a real one measured — 10 Mbit/s with a 2 s
 // queue and 1% loss under a 100 Mbit/s downlink. No phase may be aborted for
 // connections that open slowly, and the upload goodput is reported without
-// counting what is still in the queue.
+// counting what is still in the queue. quic-load infers nothing held QUIC apart
+// from TCP: with both directions at once, both wait for acknowledgements in that queue.
 func TestL9BloatedUplink(t *testing.T) {
 	l := newLab(t)
 	l.shape(false, "10ms", "100mbit", "40ms", false)
 	l.shape(true, "10ms loss 1%", "10mbit", "2s", false)
 	for run := range 3 {
 		_, _, loads := l.check([]string{"-duration", "10s"})
+		logDirections(t, run, loads)
 		for k, ld := range loads {
 			ceil := loadKinds[k].ceiling(10e6)
 			up, m := value(ld, "upload.goodput")
@@ -591,7 +593,7 @@ func TestL9BloatedUplink(t *testing.T) {
 			for _, i := range ld.Inferences {
 				inferred = append(inferred, i.Key)
 			}
-			if ld.Status == result.Error || slices.Contains(inferred, "load.inference.aborted") || up <= 0 || up > 1.005*ceil {
+			if ld.Status == result.Error || slices.Contains(inferred, "load.inference.aborted") || up <= 0 || up > 1.005*ceil || len(held(ld)) > 0 {
 				t.Errorf("run %d %s outside the contract", run, loadKinds[k].id)
 			}
 		}
@@ -600,19 +602,21 @@ func TestL9BloatedUplink(t *testing.T) {
 
 // L10: the same uplink without loss. The 2 s queue overflows and its losses come
 // together, so the node reads nothing for a second and then a burst. Upload
-// goodput is never above C, and a value below 0.93 C is not reported as settled.
+// goodput is never above C, and a value below 0.93 C is not reported as settled;
+// quic-load infers nothing held QUIC apart from TCP, as in L9.
 func TestL10OverflowingUplink(t *testing.T) {
 	l := newLab(t)
 	l.shape(false, "10ms", "100mbit", "40ms", false)
 	l.shape(true, "10ms", "10mbit", "2s", false)
 	for run := range 3 {
 		_, _, loads := l.check([]string{"-duration", "10s"})
+		logDirections(t, run, loads)
 		for k, ld := range loads {
 			ceil := loadKinds[k].ceiling(10e6)
 			up, m := value(ld, "upload.goodput")
 			conf, _ := value(ld, "upload.goodput.confidence")
 			t.Logf("run %d %s: upload %.2f Mbit/s (ceiling %.2f) confidence %v at least %v; %s", run, loadKinds[k].id, up, ceil, conf, m.AtLeast, summary(ld))
-			if ld.Status == result.Error || up <= 0 || up > 1.005*ceil || conf == result.High && up < 0.93*ceil {
+			if ld.Status == result.Error || up <= 0 || up > 1.005*ceil || conf == result.High && up < 0.93*ceil || len(held(ld)) > 0 {
 				t.Errorf("run %d %s outside the contract", run, loadKinds[k].id)
 			}
 		}
@@ -666,14 +670,38 @@ func TestQB2UnprivilegedBuffers(t *testing.T) {
 	}
 }
 
-// senderLoss is the sender loss of upload phase phase in c, percent; -1 if absent.
-func senderLoss(c result.Check, phase string) float64 {
-	id := phase + ".sender_loss"
-	if phase == "bidirectional" {
-		id = "bidirectional.sender_loss.upload"
-	}
-	v, _ := value(c, id)
+// directions are a load's goodput metrics, one per direction of a phase.
+var directions = []string{"download.goodput", "upload.goodput", "bidirectional.goodput.download", "bidirectional.goodput.upload"}
+
+// senderLoss is the sender loss of the direction whose goodput is id in c,
+// percent; -1 if absent.
+func senderLoss(c result.Check, id string) float64 {
+	v, _ := value(c, strings.Replace(id, ".goodput", ".sender_loss", 1))
 	return v
+}
+
+// held lists the directions of c, by goodput metric, that quic-load inferred
+// something held apart from TCP: the basis of each such inference.
+func held(c result.Check) []string {
+	var ids []string
+	for _, m := range c.Inferences {
+		if m.Key == "quic_load.inference.quic_held" && len(m.Basis) > 0 {
+			ids = append(ids, m.Basis[0])
+		}
+	}
+	return ids
+}
+
+// logDirections logs both loads of a run direction by direction.
+func logDirections(t *testing.T, run int, loads []result.Check) {
+	t.Helper()
+	for _, id := range directions {
+		tcp, _ := value(loads[0], id)
+		quic, m := value(loads[1], id)
+		_, tl := value(loads[0], strings.Replace(id, ".goodput", ".sender_loss", 1))
+		t.Logf("run %d %s: tcp %.1f loss %.4f%% of %d, quic %.1f at least %v loss %.4f%%", run, id, tcp, senderLoss(loads[0], id), tl.Samples, quic, m.AtLeast, senderLoss(loads[1], id))
+	}
+	t.Logf("run %d: %s", run, summary(loads[1]))
 }
 
 // Q-E1: behind a 300 Mbit/s link with a 200 ms queue, a client held to a tenth of
@@ -686,10 +714,9 @@ func TestQE1QUICHeldByThisHost(t *testing.T) {
 	for run := range 3 {
 		_, _, loads := l.check([]string{"-duration", "10s", "-load-mb", "3000"}, "systemd-run", "--quiet", "--scope", "-p", "CPUQuota=10%")
 		tcpUp, _ := value(loads[0], "upload.goodput")
-		quicUp, m := value(loads[1], "upload.goodput")
-		t.Logf("run %d: upload tcp %.1f (C %.1f) loss %.3f%%, quic %.1f at least %v loss %.3f%%; %s", run, tcpUp, ceiling(300e6),
-			senderLoss(loads[0], "upload"), quicUp, m.AtLeast, senderLoss(loads[1], "upload"), summary(loads[1]))
-		if tcpUp < 0.93*ceiling(300e6) || !slices.Contains(inferred(loads[1]), "quic_load.inference.quic_held") || !m.AtLeast {
+		_, m := value(loads[1], "upload.goodput")
+		logDirections(t, run, loads)
+		if tcpUp < 0.93*ceiling(300e6) || !slices.Contains(held(loads[1]), "upload.goodput") || !m.AtLeast {
 			t.Errorf("run %d outside the contract", run)
 		}
 	}
@@ -708,14 +735,61 @@ func TestQE2PathHoldsBoth(t *testing.T) {
 			b.setup(l)
 			for run := range 3 {
 				_, _, loads := l.check([]string{"-duration", "10s", "-load-mb", "3000"})
-				for _, ph := range []string{"upload", "bidirectional"} {
-					t.Logf("run %d %s: sender loss tcp %.3f%% quic %.3f%%", run, ph, senderLoss(loads[0], ph), senderLoss(loads[1], ph))
-				}
-				t.Logf("run %d: %s", run, summary(loads[1]))
-				if slices.Contains(inferred(loads[1]), "quic_load.inference.quic_held") {
-					t.Errorf("run %d: QUIC inferred held apart from TCP behind a %s bottleneck", run, b.name)
+				logDirections(t, run, loads)
+				if h := held(loads[1]); len(h) > 0 {
+					t.Errorf("run %d: QUIC inferred held apart from TCP behind a %s bottleneck in %v", run, b.name, h)
 				}
 			}
 		})
+	}
+}
+
+// markingPath makes each direction 20 ms of delay and 100 Mbit/s with 100 ms of
+// queue under fq_codel, which marks ECN instead of dropping, and has TCP ask for
+// ECN: a queue that costs neither load a packet.
+func (l *lab) markingPath() {
+	l.shape(false, "20ms", "100mbit", "100ms", true)
+	l.shape(true, "20ms", "100mbit", "100ms", true)
+	sh(l.t, "ip", "netns", "exec", clientNS, "sysctl", "-q", "-w", "net.ipv4.tcp_ecn=1")
+}
+
+// dropUDP drops one in n UDP packets at random as they arrive at either end, GRO
+// off there so each is one packet as sent: a path that treats UDP apart.
+func (l *lab) dropUDP(n int) {
+	for _, x := range []struct{ ns, ifc string }{{nodeNS, nodeIf}, {clientNS, clientIf}} {
+		sh(l.t, "ip", "netns", "exec", x.ns, "ethtool", "-K", x.ifc, "gro", "off")
+		sh(l.t, "tc", "-n", x.ns, "qdisc", "add", "dev", x.ifc, "handle", "ffff:", "ingress")
+		sh(l.t, "tc", "-n", x.ns, "filter", "add", "dev", x.ifc, "parent", "ffff:", "protocol", "ip", "u32",
+			"match", "ip", "protocol", "17", "0xff", "action", "gact", "pass", "random", "netrand", "drop", fmt.Sprint(n))
+	}
+}
+
+// Q-E3: a marking queue and 5% of UDP dropped hold QUIC alone: in each of 3 runs
+// quic-load infers in both directions that something held QUIC and not TCP, and
+// every QUIC goodput, both directions at once too, is a lower bound.
+func TestQE3PathDropsUDPAlone(t *testing.T) {
+	l := newLab(t)
+	l.markingPath()
+	l.dropUDP(20)
+	for run := range 3 {
+		_, _, loads := l.check([]string{"-duration", "10s"})
+		logDirections(t, run, loads)
+		if h := held(loads[1]); len(h) != 2 || !goodputBounded(loads[1]) {
+			t.Errorf("run %d: QUIC inferred held apart from TCP in %v; want both directions, every goodput a lower bound", run, h)
+		}
+	}
+}
+
+// Q-E4: the marking queue alone holds both alike: in none of 3 runs does quic-load
+// infer that something held QUIC and not TCP.
+func TestQE4MarkingHoldsBoth(t *testing.T) {
+	l := newLab(t)
+	l.markingPath()
+	for run := range 3 {
+		_, _, loads := l.check([]string{"-duration", "10s"})
+		logDirections(t, run, loads)
+		if h := held(loads[1]); len(h) > 0 {
+			t.Errorf("run %d: QUIC inferred held apart from TCP behind a marking queue in %v", run, h)
+		}
 	}
 }

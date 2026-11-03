@@ -113,11 +113,13 @@ time, in a session of its own.
   this host or the node may have held (section 5): falling behind can only lower a
   goodput counted where the bytes arrive. One that settled and then swung is not, as
   its error can go either way.
-- **Sender loss (`sender_loss`),** for a direction this host sends: segments sent
-  again over segments sent, summed over its load connections at the end of the
-  phase as the kernel counts them — data segments from `TCP_INFO` on Linux, packets
-  from `TCP_CONNECTION_INFO` on macOS; not reported elsewhere. It has no
-  interval: segments are resent in bursts, not as independent trials.
+- **Sender loss (`sender_loss`):** segments sent again over segments sent, summed
+  over a direction's load connections as the sender's kernel counts them — data
+  segments from `TCP_INFO` on Linux, packets from `TCP_CONNECTION_INFO` on macOS;
+  not reported elsewhere. For an upload this host counts at the end of the phase;
+  for a download the node counts each connection as its download ends and reports
+  the sums at the end of the session. It has no interval: segments are resent in
+  bursts, not as independent trials.
 - **Round trips under load:** independent probes sent from the moment goodput
   settled to the end of the phase; if it never settled, from four intervals before
   the end. Defined exactly as in `udp-baseline` and `tcp-baseline`; `…increase` is
@@ -205,17 +207,17 @@ probes. Run with the default parameters and a 10 s idle stage.
 
 | # | Injected | Pass condition | Last result |
 |---|---|---|---|
-| L1 | 20 ms round trip, 20 Mbit/s each way, 40 ms queue | In each of 10 runs: download and upload goodput in [0.93 C, 1.005 C], settled; neither direction of both together above its C | 10/10: download 97.1–97.4% of C, upload 95.9–96.5% |
-| L2 | As L1 at 100 Mbit/s | As L1; and never this host or the node reported as the limit (also L7) | 10/10: download 99.4%, upload 98.3–98.9%; never this host or the node as the limit |
-| L3 | 100 Mbit/s down, 10 Mbit/s up | As L1, 5 runs | 5/5: download 99.4%, upload 95.3–96.1% |
-| L4 | 20 Mbit/s, 200 ms FIFO queue | Independent UDP and TCP p50 under load in [170, 240] ms; RPM below 300 | 3/3: UDP 213–219 ms, TCP 208–220 ms; 164–197 RPM |
-| L5 | As L4 with `fq_codel` in the queue | UDP p50 under load at most 15 ms above idle; self probes slower than foreign ones | 3/3: UDP at most idle; self 263–754 ms, foreign 64–69 ms |
-| L6 | 1 Gbit/s; this host limited to a tenth of a CPU | `WARN` with this host the possible limit and every goodput a lower bound, 10 of 10 runs | 10/10; 14–79% of wake-ups late per phase |
+| L1 | 20 ms round trip, 20 Mbit/s each way, 40 ms queue | In each of 10 runs: download and upload goodput in [0.93 C, 1.005 C], settled; neither direction of both together above its C | 10/10: download 96.8–97.9% of C, upload 96.1–96.9% |
+| L2 | As L1 at 100 Mbit/s | As L1; and never this host or the node reported as the limit (also L7) | 10/10: download 99.3–99.4%, upload 98.4–99.4%; never this host or the node as the limit |
+| L3 | 100 Mbit/s down, 10 Mbit/s up | As L1, 5 runs | 5/5: download 99.4%, upload 94.9–95.6% |
+| L4 | 20 Mbit/s, 200 ms FIFO queue | Independent UDP and TCP p50 under load in [170, 240] ms; RPM below 300 | 3/3: UDP 203–216 ms, TCP 207–216 ms; 171–212 RPM |
+| L5 | As L4 with `fq_codel` in the queue | UDP p50 under load at most 15 ms above idle; self probes slower than foreign ones | 3/3: UDP at most idle; self 266–760 ms, foreign 64–65 ms |
+| L6 | 1 Gbit/s; this host limited to a tenth of a CPU | `WARN` with this host the possible limit and every goodput a lower bound, 10 of 10 runs | 10/10; 17–87% of wake-ups late per phase |
 | L8 | 100 Mbit/s; the node grants 50 MB | Every phase a lower bound; the node moves at most 50 MB | passed |
-| L9 | 100 Mbit/s down; 10 Mbit/s up with a 2 s queue and 1% loss | In each of 3 runs: no phase aborted; upload goodput reported and at most C | 3/3: upload 9.09–9.49 Mbit/s (C 9.55) |
-| L10 | As L9 without the loss | In each of 3 runs: upload goodput reported and at most C; below 0.93 C, not of `high` confidence | 3/3: upload 7.83–8.21 Mbit/s (C 9.55), `medium` |
+| L9 | 100 Mbit/s down; 10 Mbit/s up with a 2 s queue and 1% loss | In each of 3 runs: no phase aborted; upload goodput reported and at most C | 3/3: upload 9.10–9.16 Mbit/s (C 9.55) |
+| L10 | As L9 without the loss | In each of 3 runs: upload goodput reported and at most C; below 0.93 C, not of `high` confidence | 3/3: upload 7.93–8.07 Mbit/s (C 9.55), `medium` |
 
-Last run: 2026-10-29, Linux 6.8 (Ubuntu 24.04, arm64 virtual machine), Go 1.27.1.
+Last run: 2026-11-02–03, Linux 6.8 (Ubuntu 24.04, arm64 virtual machine), Go 1.27.1.
 In-memory tests check the same plumbing: goodput behind a shared 32 Mbit/s token
 bucket settles within 3% of it.
 
@@ -259,4 +261,4 @@ rules change.
 | 1 | First version. |
 | 2 | This host or the node falling behind, and late probes, report goodput as a lower bound and qualify round trips instead of making the result `INVALID`; CPU use only adds a note. A settled goodput's value starts at the moving average that settled it. Sender loss (`sender_loss`) is reported. |
 | 3 | Sender loss is reported without an interval. |
-| 4 | Each direction of a phase moves at most `-load-mb`, 25 000 MB, instead of each phase 500 MB: a phase ends when its values settle, so the traffic follows the line's rate. |
+| 4 | Each direction of a phase moves at most `-load-mb`, 25 000 MB, instead of each phase 500 MB: a phase ends when its values settle, so the traffic follows the line's rate. Downloads report sender loss, as the node counts it. |

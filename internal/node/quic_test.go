@@ -2,7 +2,10 @@ package node
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"io"
+	"maps"
 	"net/http"
 	"net/netip"
 	"testing"
@@ -114,5 +117,56 @@ func TestQUICGrant(t *testing.T) {
 				t.Fatalf("grant %+v from a node without HTTP/3", resp.Load)
 			}
 		})
+	}
+}
+
+// A QUIC download that names its phase adds what its connection sent to that
+// phase when it ends; one without a phase, or with a bad name, adds nothing.
+func TestQUICDownloadCountsItsSender(t *testing.T) {
+	s, inv := testServer(t, 10)
+	dial := quicServer(t, s)
+	sess, refused := s.store.create(tokenHash(inv.Token[:]), DefaultInviteLimits, loadWant(4<<20, 4), memClient, true, time.Now())
+	if sess == nil {
+		t.Fatalf("no session: %s", refused)
+	}
+	fetch := func(query string) {
+		c, err := dial()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.CloseWithError(0, "")
+		dial := func(context.Context, string, *tls.Config, *quic.Config) (*quic.Conn, error) { return c, nil }
+		cc := (&http3.Transport{Dial: dial}).NewClientConn(c)
+		url := "https://192.0.2.10:7444" + protocol.LoadPath(protocol.EncodeID(sess.id[:]), protocol.LoadLarge) + query
+		req, _ := http.NewRequest(http.MethodGet, url, nil)
+		req.Header.Set("Authorization", "Bearer "+protocol.EncodeID(inv.Token[:]))
+		resp, err := cc.RoundTrip(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.CopyN(io.Discard, resp.Body, 256<<10)
+		resp.Body.Close()
+	}
+	fetch("?" + protocol.LoadPhase + "=download")
+	fetch("")
+	fetch("?" + protocol.LoadPhase + "=Bad")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		sess.load.sendersMu.Lock()
+		got := maps.Clone(sess.load.senders)
+		sess.load.sendersMu.Unlock()
+		if c, ok := got["download"]; ok {
+			if len(got) != 1 || c.Sent < 100 || c.Resent > c.Sent {
+				t.Fatalf("senders %+v; want one phase with the packets of 256 KiB", got)
+			}
+			if counts := sess.load.finish(); !maps.Equal(counts.Download, got) {
+				t.Fatalf("session end download %+v, want %+v", counts.Download, got)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("senders %+v; want the download phase counted", got)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
