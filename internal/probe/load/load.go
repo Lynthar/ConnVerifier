@@ -293,6 +293,10 @@ func run(ctx context.Context, cfg Config, version string, earlier []result.Check
 	}
 	allowance := min(probeAllowance, lg.Bytes/10)                            // a small grant still leaves the phases most of it
 	dirBytes := min(cfg.dirMB*1e6, (lg.Bytes-allowance)/int64(directions())) // a smaller grant shared alike
+	limitWhy := stopBudget
+	if dirBytes < cfg.dirMB*1e6 {
+		limitWhy = stopNodeBudget // the reader asks the node's owner, not -load-mb
+	}
 	maxConns := max(lg.Connections-probeHeadroom, 2)
 	probes := startProbes(ctx, cfg, sess, inv, dial, dialUDP)
 	base := idleOf(earlier)
@@ -310,7 +314,7 @@ func run(ctx context.Context, cfg Config, version string, earlier []result.Check
 		}
 		ticks0, over0 := lag.Counts()
 		cpu0, cpuOK := netenv.ProcessCPU()
-		r := runPhase(ctx, t, spec, cfg.interval, cfg.phaseTime, int64(spec.directions())*dirBytes, maxConns)
+		r := runPhase(ctx, t, spec, cfg.interval, cfg.phaseTime, int64(spec.directions())*dirBytes, limitWhy, maxConns)
 		r.waited, r.drained = waited, drained
 		ticks1, over1 := lag.Counts()
 		r.lagTicks, r.lagOver = ticks1-ticks0, over1-over0

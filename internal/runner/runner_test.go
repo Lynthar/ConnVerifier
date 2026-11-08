@@ -2,6 +2,7 @@ package runner
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -96,6 +97,20 @@ func TestSkippedRenders(t *testing.T) {
 		}
 		if out := b.String(); strings.Contains(out, "check.not_selected") || strings.Count(out, "\n") != 2 || !strings.Contains(out, "SKIP") {
 			t.Errorf("%s:\n%s", lang, out)
+		}
+	}
+}
+
+// A check left out by -only has the JSON shape of one that ran: objects and
+// arrays where a run has them, never null.
+func TestSkippedKeepsTheJSONShape(t *testing.T) {
+	b, err := json.Marshal(skipped("tcp-load", 3, "tcp", "192.0.2.10:7443"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"params":{}`, `"metrics":[]`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("%s lacks %s", b, want)
 		}
 	}
 }

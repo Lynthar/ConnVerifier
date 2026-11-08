@@ -153,8 +153,42 @@ func TestPhasesStopAtTheTrafficLimit(t *testing.T) {
 	if node := float64(tr.SentBytes + tr.ReceivedBytes); node > client+4e6 || node < client-4e6 {
 		t.Errorf("node counted %v bytes, client %v", node, client)
 	}
+	if why := stopReasons(c); len(why) > 0 && !slices.Equal(slices.Compact(slices.Clone(why)), []string{stopBudget}) {
+		t.Errorf("stop reasons %v; the limit was -load-mb's, want %s", why, stopBudget)
+	}
 	n.stop()
 	waitGoroutines(t, base)
+}
+
+// stopReasons lists the why of every load.inference.not_saturated in c.
+func stopReasons(c result.Check) []string {
+	var why []string
+	for _, m := range c.Inferences {
+		if m.Key == "load.inference.not_saturated" {
+			why = append(why, m.Params["why"].(string))
+		}
+	}
+	return why
+}
+
+// A grant smaller than -load-mb asks for sets the phases' limits; a phase that
+// stops there says the node's grant ran out, so the reader asks the node's owner
+// rather than raising -load-mb.
+func TestASmallGrantStopsAtTheNodeBudget(t *testing.T) {
+	lim := node.DefaultInviteLimits
+	lim.MaxLoadBytes = 6_000_000 // under the 4 × 2 MB the client asks for
+	n := startNode(t, lim)
+	c, err := Run(context.Background(), memConfig(n, 2), "vtest", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	why := stopReasons(c)
+	if c.Status == result.Error || c.Status == result.Invalid || len(why) == 0 {
+		t.Fatalf("status %s %v; want phases stopped at the grant", c.Status, keys(c))
+	}
+	if !slices.Equal(slices.Compact(slices.Clone(why)), []string{stopNodeBudget}) {
+		t.Errorf("stop reasons %v, want %s", why, stopNodeBudget)
+	}
 }
 
 // The same phases over HTTP/3: every one stops at its traffic limit, both sides

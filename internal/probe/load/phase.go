@@ -236,7 +236,8 @@ type phaseRun struct {
 	t             *target
 	name          string // the phase's, for the node's counts of its downloads
 	id            time.Duration
-	limit         int64 // bytes in all directions
+	limit         int64  // bytes in all directions
+	limitWhy      string // the stop reason at limit: stopNodeBudget when the node's grant set it
 	maxConns      int
 	ctx           context.Context
 	cancel        context.CancelFunc
@@ -332,7 +333,7 @@ func (p *phaseRun) stopped() bool {
 func (p *phaseRun) spend(d *direction, n int) {
 	d.total.Add(int64(n))
 	if p.total.Add(int64(n)) >= p.limit {
-		p.stop(stopBudget, nil)
+		p.stop(p.limitWhy, nil)
 	}
 }
 
@@ -745,9 +746,10 @@ func (p *phaseRun) window(from, to time.Time) ([]foreignProbe, []selfProbe) {
 // runPhase runs §5.4 for one phase: a load connection per direction to start,
 // one more per direction each interval, goodput settled first and then
 // responsiveness, or until the time limit, the byte limit, an error or ctx.
-func runPhase(ctx context.Context, t *target, spec phaseSpec, id, maxTime time.Duration, bytes int64, maxConns int) phaseResult {
+// limitWhy is the stop reason recorded at the byte limit.
+func runPhase(ctx context.Context, t *target, spec phaseSpec, id, maxTime time.Duration, bytes int64, limitWhy string, maxConns int) phaseResult {
 	pctx, cancel := context.WithCancel(ctx)
-	p := &phaseRun{t: t, name: spec.name, id: id, limit: bytes, maxConns: maxConns, ctx: pctx, cancel: cancel, stopCh: make(chan struct{})}
+	p := &phaseRun{t: t, name: spec.name, id: id, limit: bytes, limitWhy: limitWhy, maxConns: maxConns, ctx: pctx, cancel: cancel, stopCh: make(chan struct{})}
 	start := time.Now()
 	quic := t.quic != nil
 	if spec.down {

@@ -140,6 +140,7 @@ func skipped(id string, methodVersion int, proto, addr string) result.Check {
 	return result.Check{
 		ID: id, MethodVersion: methodVersion, Status: result.Skip,
 		Path:     result.Path{Node: addr, Family: nodeclient.Family(addr), Protocol: proto},
+		Params:   map[string]any{},
 		Metrics:  []result.Metric{},
 		Warnings: []result.Message{{Key: "check.not_selected"}},
 	}
