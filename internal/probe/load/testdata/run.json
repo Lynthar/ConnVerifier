@@ -1149,6 +1149,34 @@
       ],
       "not_proven": [
         {
+          "key": "quic_load.not_proven.queue_off_path",
+          "params": {
+            "phase": "download",
+            "quic_mbps": 93.5,
+            "quic_ms": 138.8,
+            "tcp_mbps": 200,
+            "tcp_ms": 20
+          },
+          "basis": [
+            "download.udp.rtt.p50.increase",
+            "download.goodput"
+          ]
+        },
+        {
+          "key": "quic_load.not_proven.queue_off_path",
+          "params": {
+            "phase": "upload",
+            "quic_mbps": 19.9,
+            "quic_ms": 138.8,
+            "tcp_mbps": 40,
+            "tcp_ms": 20
+          },
+          "basis": [
+            "upload.udp.rtt.p50.increase",
+            "upload.goodput"
+          ]
+        },
+        {
           "key": "load.not_proven.queue_not_drained",
           "params": {
             "phase": "bidirectional",

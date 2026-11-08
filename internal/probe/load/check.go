@@ -33,12 +33,22 @@ const (
 	heldRatio = 5
 )
 
+// The latency note on a direction: QUIC's goodput below heldShare of TCP's while the
+// UDP probe's p50 rose at least offPathRatio times as much as under TCP's load and
+// offPathGapMs more. A lighter load meeting a deeper queue is not the path's shared bottleneck.
+const (
+	offPathRatio = 3
+	offPathGapMs = 10
+)
+
 // tcpRef is what tcp-load measured in one direction of one phase.
 type tcpRef struct {
 	bps       float64 // goodput, bit/s
 	loss      float64 // sender loss, percent
 	sent      uint64  // segments the sender loss is over
 	lossKnown bool
+	udpInc    float64 // the UDP probe's p50 under load less idle, ms
+	incKnown  bool
 }
 
 // tcpRefs collects tcp-load's download and upload phases by goodput metric ID from
@@ -64,7 +74,8 @@ func tcpRefs(checks []result.Check) map[string]tcpRef {
 			id := goodputIDs(spec)[0]
 			if mbps, ok := get(id); ok && mbps > 0 {
 				loss, known := get(lossID(id))
-				ref[id] = tcpRef{bps: mbps * 1e6, loss: loss, sent: samples(c, lossID(id)), lossKnown: known}
+				inc, incKnown := get(spec.name + ".udp.rtt.p50.increase")
+				ref[id] = tcpRef{bps: mbps * 1e6, loss: loss, sent: samples(c, lossID(id)), lossKnown: known, udpInc: inc, incKnown: incKnown}
 			}
 		}
 	}
@@ -110,6 +121,29 @@ func quicHeld(p phaseResult, ref map[string]tcpRef) (fires bool, why string, par
 	fires = d.finalBPS < heldShare*t.bps && (q < t.loss || q > heldRatio*tcpLoss)
 	return fires, "", map[string]any{"phase": p.spec.name, "quic_mbps": math.Round(d.finalBPS/1e5) / 10,
 		"tcp_mbps": math.Round(t.bps/1e5) / 10, "quic_loss": math.Round(q*100) / 100, "tcp_loss": math.Round(t.loss*100) / 100}
+}
+
+// queueOffPath reports whether QUIC, carrying bps while its UDP probe's p50 rose
+// incMs, met a queue apart from the one TCP met (t); not judged without TCP's rise.
+func queueOffPath(bps, incMs float64, t tcpRef) bool {
+	if !t.incKnown || t.bps <= 0 {
+		return false
+	}
+	tcp := max(t.udpInc, 0) // a rise below idle is no rise
+	return bps < heldShare*t.bps && incMs >= offPathRatio*tcp && incMs-tcp >= offPathGapMs
+}
+
+// offPathNote adds the latency note (queueOffPath) for p, a measured phase that
+// loads one direction, whose UDP probe's p50 rose incMs.
+func offPathNote(c *result.Check, p phaseResult, incMs float64, ref map[string]tcpRef) {
+	id := goodputIDs(p.spec)[0]
+	t := ref[id]
+	if !queueOffPath(p.dirs[0].finalBPS, incMs, t) {
+		return
+	}
+	c.NotProven = append(c.NotProven, msg("quic_load.not_proven.queue_off_path", map[string]any{"phase": p.spec.name,
+		"quic_mbps": math.Round(p.dirs[0].finalBPS/1e5) / 10, "tcp_mbps": math.Round(t.bps/1e5) / 10,
+		"quic_ms": math.Round(incMs*10) / 10, "tcp_ms": math.Round(t.udpInc*10) / 10}, p.spec.name+".udp.rtt.p50.increase", id))
 }
 
 // heldDirections applies the quic-load rule to the measured phases that load one
@@ -305,6 +339,9 @@ func finish(c *result.Check, phases []phaseResult, ur *echo.UDPRun, tr *echo.TCP
 			}{{"p50", 500, base.udpP50}, {"p95", 950, base.udpP95}} {
 				if m, ok := increase(pre+"udp.rtt."+x.q+".increase", o.RTT, x.idleMs, x.pm); ok {
 					c.Metrics = append(c.Metrics, m)
+					if x.q == "p50" && v.quic && measured && p.spec.directions() == 1 {
+						offPathNote(c, p, *m.Value, v.tcp)
+					}
 				}
 			}
 		}

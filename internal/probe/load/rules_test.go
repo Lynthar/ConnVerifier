@@ -167,3 +167,55 @@ func TestStatusRules(t *testing.T) {
 		})
 	}
 }
+
+// The latency note (quic-load section 5): QUIC below 0.7 of TCP's goodput whose UDP
+// probe rose at least 3 times TCP's rise and 10 ms more.
+func TestQueueOffPath(t *testing.T) {
+	tcp := func(inc float64) tcpRef { return tcpRef{bps: 1000e6, udpInc: inc, incKnown: true} }
+	for _, tc := range []struct {
+		name  string
+		mbps  float64
+		incMs float64
+		ref   tcpRef
+		want  bool
+	}{
+		{"lighter load, deeper queue", 150, 40, tcp(1), true},
+		{"TCP's rise below idle counts as none", 150, 10, tcp(-0.5), true},
+		{"QUIC at 0.7 of TCP", 700, 40, tcp(1), false},
+		{"under 3 times TCP's rise", 150, 29, tcp(10), false},
+		{"under 10 ms more", 150, 9, tcp(0), false},
+		{"TCP's rise unknown", 150, 40, tcpRef{bps: 1000e6}, false},
+		{"no TCP", 150, 40, tcpRef{}, false},
+	} {
+		if got := queueOffPath(tc.mbps*1e6, tc.incMs, tc.ref); got != tc.want {
+			t.Errorf("%s: queueOffPath = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The note names the phase and both loads' goodput and rise, and leaves the status alone.
+func TestOffPathNote(t *testing.T) {
+	p := settled(phases[0])
+	p.dirs = []*direction{{down: true, finalBPS: 150e6}}
+	ref := map[string]tcpRef{"download.goodput": {bps: 1000e6, udpInc: 1.04, incKnown: true}}
+	var c result.Check
+	offPathNote(&c, p, 40, ref)
+	if len(c.NotProven) != 1 || c.Status != "" {
+		t.Fatalf("notes %+v, status %q", c.NotProven, c.Status)
+	}
+	m := c.NotProven[0]
+	want := map[string]any{"phase": "download", "quic_mbps": 150.0, "tcp_mbps": 1000.0, "quic_ms": 40.0, "tcp_ms": 1.0}
+	if m.Key != "quic_load.not_proven.queue_off_path" || len(m.Params) != len(want) {
+		t.Fatalf("%+v", m)
+	}
+	for k, v := range want {
+		if m.Params[k] != v {
+			t.Errorf("%s = %v, want %v", k, m.Params[k], v)
+		}
+	}
+	c = result.Check{}
+	offPathNote(&c, p, 40, map[string]tcpRef{})
+	if len(c.NotProven) != 0 {
+		t.Errorf("a note without tcp-load: %+v", c.NotProven)
+	}
+}

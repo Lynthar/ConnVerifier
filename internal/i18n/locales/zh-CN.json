@@ -277,5 +277,6 @@
   "quic_load.inference.quic_held": "{phase}：同一条路径上，TCP 跑到 {tcp_mbps} Mbit/s、发送端丢包率 {tcp_loss}%；QUIC 只有 {quic_mbps} Mbit/s、丢包率 {quic_loss}%：goodput 不到 TCP 的七成，丢包率与 TCP 不相称（低于 TCP，或超过它的 5 倍；TCP 一次没重传按重传了一段算）。限住 QUIC 的是 TCP 没碰到的东西：某一端的 QUIC（实现、拥塞控制、网卡、收包一端的 UDP 路径），或路径对 UDP 的另外处理（限速、突发限制），没有判定是哪一个。这个方向上 QUIC 的 goodput 只是下限，双向阶段里也是。",
   "quic_load.not_proven.quic_held_no_counters": "{phase}：两种负载的发送端丢包没有都报上来（上行看本机平台，下行看节点），没有判定 QUIC 是不是被 TCP 没碰到的东西限住。",
   "quic_load.not_proven.quic_held_no_tcp": "{phase}：同一次检查里 tcp-load 没测到这个方向，没有判定 QUIC 是不是被 TCP 没碰到的东西限住。",
-  "quic_load.not_proven.quic_held_tcp_lossless": "{phase}：TCP 一次重传都没有，QUIC 的丢包也不超过 TCP 一段所占比例的 5 倍，没有丢包可作区分，没有判定 QUIC 是不是被 TCP 没碰到的东西限住。"
+  "quic_load.not_proven.quic_held_tcp_lossless": "{phase}：TCP 一次重传都没有，QUIC 的丢包也不超过 TCP 一段所占比例的 5 倍，没有丢包可作区分，没有判定 QUIC 是不是被 TCP 没碰到的东西限住。",
+  "quic_load.not_proven.queue_off_path": "{phase}：同一条路径上 QUIC 跑得比 TCP 少（{quic_mbps} 对 {tcp_mbps} Mbit/s），跑满时延却涨得更多（{quic_ms} 对 {tcp_ms}）。负载更轻、排队反而更深，这个队列不在路径共享的瓶颈上，而在某一端（本机或节点），或在路径上单独对待 UDP 的地方；这一阶段的跑满时延说的多半是那个队列，不是路径。是哪一个没有判定。"
 }

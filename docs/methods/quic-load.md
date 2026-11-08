@@ -127,6 +127,22 @@ share where TCP resent nothing: no loss tells them apart.
 The rule is not applied without sender loss on both sides (an older node reports
 none for downloads); that, and a phase it could not judge, each add a note.
 
+**A queue apart from the path's** in the download or the upload phase, when
+`tcp-load` in the same check measured that phase and both loads' UDP probe has
+an idle round trip to rise from:
+
+- QUIC's goodput is below 0.7 of TCP's, and
+- the UDP probe's p50 rose at least 3 times as much under QUIC's load as under
+  TCP's, and by at least 10 ms more. A rise below idle counts as none.
+
+A lighter load meeting a deeper queue does not come from the path's shared
+bottleneck. The queue QUIC met is at one end — this host or the node — or where
+the path holds UDP apart, and that phase's round trips under load say more about
+that queue than about the path. Which one is not determined; the result adds a
+note and the status does not change. With the bottleneck on the path, in virtual
+machines and between servers, no phase met it; a Mac receiving QUIC faster than
+it can (section 6) met it in most phases.
+
 ## 6. Influences
 
 - **Congestion control:** NewReno in quic-go, at the node for downloads and at this
@@ -144,6 +160,15 @@ none for downloads); that, and a phase it could not judge, each add a note.
   queue, and over QUIC it comes much closer to a foreign probe than over TCP
   (section 9, L5).
 - **CPU:** routers reach their limit sooner over QUIC than over TCP.
+- **This host's receive path on macOS:** macOS hands received UDP to the sockets
+  one packet at a time, and with a socket per load connection the kernel caps QUIC
+  whatever the CPU has left: near 1.4 Gbit/s on the Mac measured, lower on slower
+  ones. Above that the load queues in the
+  kernel ahead of every socket: the goodput is the Mac's limit, the round trips
+  under load include up to tens of milliseconds of that queue, and a connection
+  added in an interval fills it until the kernel drops thousands of packets at
+  once, which QUIC counts as sender loss. Sharing sockets among connections did
+  not lift the cap. TCP is not affected the same way.
 - Otherwise as in `tcp-load`.
 
 ## 7. Statistics
@@ -198,8 +223,8 @@ while the independent UDP probe to the same node got replies, the result adds th
 inference that something on the path may block QUIC, or that the node's QUIC port
 is not open. Rule 3 also holds when something held QUIC that did not hold TCP in the
 download or the upload phase (section 5).
-Buffers below what quic-go asks for, and a phase the rule could not judge, add a
-note without changing the status.
+Buffers below what quic-go asks for, a phase the rule could not judge, and a
+queue apart from the path's (section 5), add a note without changing the status.
 
 ## Method version changes
 

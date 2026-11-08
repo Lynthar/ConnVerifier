@@ -228,6 +228,8 @@ Inferred
   - Both directions: responsiveness did not settle and may not reflect the full queue.
   - Both directions: responsiveness 248 RPM, below 300 — round trips above 200 ms while the path is loaded, which the draft calls poor.
 Not proven
+  - Download: QUIC moved less than TCP over the same path (93.5 against 200 Mbit/s), yet the round trip under its load rose more (139 ms against 20 ms). A lighter load meeting a deeper queue is not the path's shared bottleneck: the queue QUIC met is at one end — this host or the node — or where the path holds UDP apart, and this phase's round trips under load say more about that queue than about the path. Which one is not determined.
+  - Upload: QUIC moved less than TCP over the same path (19.9 against 40 Mbit/s), yet the round trip under its load rose more (139 ms against 20 ms). A lighter load meeting a deeper queue is not the path's shared bottleneck: the queue QUIC met is at one end — this host or the node — or where the path holds UDP apart, and this phase's round trips under load say more about that queue than about the path. Which one is not determined.
   - Both directions: the previous phase's queue had not drained after 10 s, so this phase started on a fuller path.
   - Both directions: 3 requests on a new connection did not complete and are left out of the responsiveness, which is therefore better than what the path delivered.
   - Where the bottleneck is — this connection, the networks between, or the node's own uplink — is not determined.

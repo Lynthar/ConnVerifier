@@ -158,6 +158,13 @@ mapping and quietly turn every result into "the NAT is fine".
   STUN, no DNS, one UDP packet size; delay is round trip only, never one way.
   Goodput is to one node: whether the limit is your connection or the node's own
   uplink is not determined.
+- **On macOS, QUIC tops out on the Mac itself.** macOS hands received UDP to the
+  sockets one packet at a time, and with a socket per QUIC connection the kernel
+  caps `quic-load` and queues the rest: near 1.4 Gbit/s on the Mac measured,
+  lower on slower ones. On faster paths
+  the QUIC goodput is the Mac's limit and its round trips under load include tens
+  of milliseconds of that queue; `quic-load` adds a note when it sees this against
+  `tcp-load` in the same check. `tcp-load` is not affected.
 - **The JSON schema is `v0`.** It can still change between builds; pin a build
   if you parse it, and don't parse the text.
 - **The exit code doesn't judge your network.** `0` means the run completed,

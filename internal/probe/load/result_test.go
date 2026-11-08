@@ -84,8 +84,8 @@ func fillStream(s *echo.Stream, p []phaseResult) {
 
 // goldenCheck is a made-up tcp-load, or with quic a quic-load whose sockets got
 // Linux's default UDP buffers, compared with a tcp-load that moved twice its upload
-// at a twentieth of its loss, downloaded about twice as fast resending nothing, and
-// did not measure both directions.
+// at a twentieth of its loss, downloaded about twice as fast resending nothing, both
+// with its UDP probe rising 20 ms, and did not measure both directions.
 func goldenCheck(quic bool) result.Check {
 	cfg := Config{interval: time.Second, phaseTime: 20 * time.Second, dirMB: 500, rate: 50, slipLimit: echo.DefaultSlipLimit, cpuMax: 0.875}
 	ph := syntheticPhases()
@@ -118,7 +118,7 @@ func goldenCheck(quic bool) result.Check {
 		q = &quicPath{recv: 425_984, send: 425_984}
 		q.handshakes.Store(48)
 		notes = bufferFacts(&c, q)
-		ref = map[string]tcpRef{"upload.goodput": {bps: 40e6, loss: 0.25, sent: 2_000_000, lossKnown: true}, "download.goodput": {bps: 200e6, sent: 9_000_000, lossKnown: true}}
+		ref = map[string]tcpRef{"upload.goodput": {bps: 40e6, loss: 0.25, sent: 2_000_000, lossKnown: true, udpInc: 20, incKnown: true}, "download.goodput": {bps: 200e6, sent: 9_000_000, lossKnown: true, udpInc: 20, incKnown: true}}
 	}
 	finish(&c, ph, ur, tr, notes, &protocol.LoadCounts{LagTicks: 5200, LagOver: 3}, base, cfg, q, ref)
 	return c
@@ -182,13 +182,13 @@ func TestIdleFromBaselineResult(t *testing.T) {
 	}
 }
 
-// quic-load finds every direction of tcp-load, with its sender loss, in tcp-load's
-// result.
+// quic-load finds every direction of tcp-load, with its sender loss and its UDP
+// probe's rise under load, in tcp-load's result.
 func TestTCPRefsFromTCPLoad(t *testing.T) {
 	ref := tcpRefs([]result.Check{goldenCheck(false)})
 	for _, id := range []string{"download.goodput", "upload.goodput"} {
-		if u, ok := ref[id]; !ok || u.bps <= 0 || !u.lossKnown || u.sent == 0 {
-			t.Errorf("tcpRefs(golden tcp-load)[%q] = %+v, %v; want goodput and sender loss", id, u, ok)
+		if u, ok := ref[id]; !ok || u.bps <= 0 || !u.lossKnown || u.sent == 0 || !u.incKnown {
+			t.Errorf("tcpRefs(golden tcp-load)[%q] = %+v, %v; want goodput, sender loss and the probe's rise", id, u, ok)
 		}
 	}
 }
@@ -235,6 +235,9 @@ func TestTextHasNoRawKeys(t *testing.T) {
 	}
 	add(func(c *result.Check) {
 		c.Error = &result.Message{Key: "quic_load.error.address", Params: map[string]any{"error": "x"}}
+	})
+	add(func(c *result.Check) {
+		c.NotProven = []result.Message{{Key: "quic_load.not_proven.queue_off_path", Params: map[string]any{"phase": "download", "quic_mbps": 150.0, "tcp_mbps": 1000.0, "quic_ms": 40.0, "tcp_ms": 1.0}}}
 	})
 	for _, reason := range []string{protocol.ErrReasonBusy, protocol.ErrReasonQuota} {
 		add(func(c *result.Check) {
