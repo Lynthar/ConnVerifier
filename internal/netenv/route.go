@@ -74,14 +74,14 @@ const routeTimeout = 2 * time.Second
 
 // Host is the result's host object: for each address family the checks ran on,
 // the kind of interface the route to their node leaves by, or nil when no check
-// ran. It keeps its own deadline, so it still answers after the run was interrupted.
+// ran on a node. It keeps its own deadline, so it still answers after the run was interrupted.
 func Host(checks []result.Check) *result.Host {
 	ctx, cancel := context.WithTimeout(context.Background(), routeTimeout)
 	defer cancel()
 	var h result.Host
 	nodes, families := map[string]bool{}, map[string]bool{}
 	for _, c := range checks {
-		if c.Status == result.Skip || nodes[c.Path.Node] {
+		if c.Status == result.Skip || c.Path.Node == "" || nodes[c.Path.Node] {
 			continue
 		}
 		nodes[c.Path.Node] = true

@@ -27,6 +27,7 @@ func TestDialAndListenOnlyHere(t *testing.T) {
 		},
 		"github.com/quic-go/quic-go":       {"DialAddr": true, "DialAddrEarly": true, "ListenAddr": true, "ListenAddrEarly": true},
 		"github.com/quic-go/quic-go/http3": {"ListenAndServeQUIC": true, "ListenAndServeTLS": true},
+		"golang.org/x/net/icmp":            {"ListenPacket": true},
 	}
 	// A transport literal must name its dial function, or it dials on its own.
 	mustDial := map[string]map[string]string{

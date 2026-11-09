@@ -1,0 +1,22 @@
+package gateway
+
+import (
+	"context"
+	"net/netip"
+	"testing"
+)
+
+func TestZZProbe(t *testing.T) {
+	for _, a := range []string{"127.0.0.1", "::1"} {
+		p, err := newICMP(netip.MustParseAddr(a))
+		if err != nil {
+			t.Logf("%s icmp err %v", a, err)
+			continue
+		}
+		rs := sample(context.Background(), p, 7, 5, interval)
+		p.close()
+		t.Logf("%s icmp %+v", a, rs)
+		tp := newTCP(netip.MustParseAddr(a), 9)
+		t.Logf("%s tcp closed port %+v", a, tp.probe(context.Background(), 0))
+	}
+}

@@ -1,0 +1,230 @@
+{
+  "schema": "connverifier.result/v0",
+  "tool": {
+    "name": "connverifier",
+    "version": "v0.0.0-golden",
+    "go": "go1.27.0",
+    "os": "linux",
+    "arch": "amd64"
+  },
+  "run_id": "golden",
+  "started": "2026-01-01T00:00:00Z",
+  "ended": "2026-01-01T00:00:16.005Z",
+  "elapsed_ms": 16005,
+  "checks": [
+    {
+      "id": "gateway",
+      "method_version": 1,
+      "status": "WARN",
+      "path": {
+        "node": "",
+        "family": "ipv4",
+        "protocol": "icmp"
+      },
+      "params": {
+        "gateway_class": "private",
+        "probes": 100,
+        "rate_per_s": 20,
+        "reply_wait_ms": 900
+      },
+      "elapsed_ms": 5101,
+      "metrics": [
+        {
+          "id": "sent",
+          "unit": "count",
+          "value": 100
+        },
+        {
+          "id": "replies",
+          "unit": "count",
+          "value": 96
+        },
+        {
+          "id": "lost",
+          "unit": "count",
+          "value": 4
+        },
+        {
+          "id": "loss",
+          "unit": "%",
+          "value": 4,
+          "low": 1.5663,
+          "high": 9.8371,
+          "samples": 100
+        },
+        {
+          "id": "rtt.min",
+          "unit": "ms",
+          "value": 1.2,
+          "samples": 96
+        },
+        {
+          "id": "rtt.p50",
+          "unit": "ms",
+          "value": 1.611,
+          "samples": 96
+        },
+        {
+          "id": "rtt.p95",
+          "unit": "ms",
+          "value": 2.022,
+          "samples": 96
+        },
+        {
+          "id": "rtt.p99",
+          "unit": "ms",
+          "samples": 96,
+          "insufficient": true
+        },
+        {
+          "id": "rtt.p99_9",
+          "unit": "ms",
+          "samples": 96,
+          "insufficient": true
+        },
+        {
+          "id": "pdv.p50",
+          "unit": "ms",
+          "value": 0.411,
+          "samples": 96
+        },
+        {
+          "id": "pdv.p95",
+          "unit": "ms",
+          "value": 0.822,
+          "samples": 96
+        },
+        {
+          "id": "pdv.p99",
+          "unit": "ms",
+          "samples": 96,
+          "insufficient": true
+        },
+        {
+          "id": "pdv.p99_9",
+          "unit": "ms",
+          "samples": 96,
+          "insufficient": true
+        }
+      ],
+      "inferences": [
+        {
+          "key": "gateway.inference.loss_icmp",
+          "params": {
+            "count": 4,
+            "wait_ms": 900
+          },
+          "basis": [
+            "lost",
+            "loss"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "gateway",
+      "method_version": 1,
+      "status": "PASS",
+      "path": {
+        "node": "",
+        "family": "ipv6",
+        "protocol": "tcp"
+      },
+      "params": {
+        "gateway_class": "link_local",
+        "probes": 100,
+        "rate_per_s": 20,
+        "reply_wait_ms": 900,
+        "tcp_port": 53
+      },
+      "elapsed_ms": 10904,
+      "metrics": [
+        {
+          "id": "sent",
+          "unit": "count",
+          "value": 100
+        },
+        {
+          "id": "replies",
+          "unit": "count",
+          "value": 100
+        },
+        {
+          "id": "lost",
+          "unit": "count",
+          "value": 0
+        },
+        {
+          "id": "loss",
+          "unit": "%",
+          "value": 0,
+          "low": 0,
+          "high": 3.6993,
+          "samples": 100
+        },
+        {
+          "id": "rtt.min",
+          "unit": "ms",
+          "value": 1.5,
+          "samples": 100
+        },
+        {
+          "id": "rtt.p50",
+          "unit": "ms",
+          "value": 1.911,
+          "samples": 100
+        },
+        {
+          "id": "rtt.p95",
+          "unit": "ms",
+          "value": 2.322,
+          "samples": 100
+        },
+        {
+          "id": "rtt.p99",
+          "unit": "ms",
+          "value": 2.322,
+          "samples": 100
+        },
+        {
+          "id": "rtt.p99_9",
+          "unit": "ms",
+          "samples": 100,
+          "insufficient": true
+        },
+        {
+          "id": "pdv.p50",
+          "unit": "ms",
+          "value": 0.411,
+          "samples": 100
+        },
+        {
+          "id": "pdv.p95",
+          "unit": "ms",
+          "value": 0.822,
+          "samples": 100
+        },
+        {
+          "id": "pdv.p99",
+          "unit": "ms",
+          "value": 0.822,
+          "samples": 100
+        },
+        {
+          "id": "pdv.p99_9",
+          "unit": "ms",
+          "samples": 100,
+          "insufficient": true
+        }
+      ],
+      "not_proven": [
+        {
+          "key": "gateway.not_proven.tcp",
+          "params": {
+            "port": 53
+          }
+        }
+      ]
+    }
+  ]
+}

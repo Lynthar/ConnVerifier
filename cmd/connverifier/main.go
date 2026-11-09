@@ -31,9 +31,9 @@ import (
 const usage = `usage: connverifier <command> [flags]
 
 commands:
-  check      measure round trip, its variation and UDP loss to a node, idle and
-             with the path loaded over TCP and over QUIC, and the goodput of
-             each load
+  check      measure round trip and loss to the default gateway, then round
+             trip, its variation and UDP loss to a node, idle and with the path
+             loaded over TCP and over QUIC, and the goodput of each load
   capacity   hold N long-lived TCP connections against a node and report drops
   serve      run a node that clients measure against
   invite     create, list or revoke the invites a node accepts
@@ -70,12 +70,13 @@ func main() {
 			out.register(fs)
 			fs.BoolVar(&yes, "yes", false, "start the load checks without the confirmation prompt (required when stdin is not a terminal)")
 		})
-		invalidIf(sel.Validate())
 		invalidIf(cfg.Validate())
+		node, _, _ := cfg.Shared()
+		invalidIf(sel.Validate(node))
 		ld.Use(cfg.Shared())
 		invalidIf(ld.Validate())
 		invalidIf(out.resolve())
-		if n := sel.Loads(); n > 0 {
+		if n := sel.Loads(node); n > 0 {
 			confirm(out.cat, ld.Notice(n), yes)
 		}
 		started := time.Now()

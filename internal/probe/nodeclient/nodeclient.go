@@ -23,6 +23,9 @@ import (
 // out of shell history and process listings.
 const InviteEnv = "CONNVERIFIER_NODE"
 
+// ErrNoInvite is ResolveInvite's answer when neither -node nor InviteEnv is set.
+var ErrNoInvite = errors.New("no node given: use -node INVITE, -node @FILE or set " + InviteEnv)
+
 // ResolveInvite reads a -node value: an invite, @FILE holding one, or empty for
 // the InviteEnv variable.
 func ResolveInvite(s string) (protocol.Invite, error) {
@@ -30,7 +33,7 @@ func ResolveInvite(s string) (protocol.Invite, error) {
 		s = os.Getenv(InviteEnv)
 	}
 	if s == "" {
-		return protocol.Invite{}, fmt.Errorf("no node given: use -node INVITE, -node @FILE or set %s", InviteEnv)
+		return protocol.Invite{}, ErrNoInvite
 	}
 	if path, ok := strings.CutPrefix(s, "@"); ok {
 		data, err := os.ReadFile(path)

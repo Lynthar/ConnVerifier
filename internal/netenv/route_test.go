@@ -29,6 +29,7 @@ func TestHost(t *testing.T) {
 	}{
 		{"no checks", nil, nil},
 		{"skipped only", []result.Check{check("127.0.0.1:9", result.Skip)}, nil},
+		{"no node", []result.Check{check("", result.Pass)}, nil},
 		{"one per family", []result.Check{
 			check("127.0.0.1:9", result.Pass),
 			check("127.0.0.1:9", result.Warn),

@@ -56,7 +56,11 @@ func writeCheck(b *strings.Builder, c result.Check, cat *i18n.Catalog) {
 		}
 		return
 	}
-	field("", cat.Text("label.node", nil), pathText(c.Path))
+	label := "label.node"
+	if c.Path.Node == "" { // a check of this host's own surroundings
+		label = "label.path"
+	}
+	field("", cat.Text(label, nil), pathText(c.Path))
 	field("", cat.Text("label.method_version", nil), strconv.Itoa(c.MethodVersion))
 	field("", cat.Text("label.elapsed", nil), formatMs(float64(c.ElapsedMs)))
 
@@ -115,12 +119,16 @@ func Message(cat *i18n.Catalog, m result.Message) string {
 
 // messageParams formats numeric "_ms" parameters as durations, the same way
 // parameters and metrics are shown, so messages do not print raw milliseconds.
-// A "phase" or "why" parameter holds an identifier, shown in cat's language.
+// A "phase", "why" or "family" parameter holds an identifier, shown as a reader would.
 func messageParams(cat *i18n.Catalog, params map[string]any) map[string]any {
 	out := make(map[string]any, len(params))
 	for name, v := range params {
 		if f, ok := number(v); ok && strings.HasSuffix(name, "_ms") {
 			out[name] = formatMs(f)
+			continue
+		}
+		if s, ok := v.(string); ok && name == "family" {
+			out[name] = familyText(s)
 			continue
 		}
 		if s, ok := v.(string); ok && (name == "phase" || name == "why") {
@@ -202,7 +210,10 @@ func familyText(family string) string {
 }
 
 func pathText(p result.Path) string {
-	parts := []string{p.Node}
+	var parts []string
+	if p.Node != "" {
+		parts = append(parts, p.Node)
+	}
 	if f := familyText(p.Family); f != "" {
 		parts = append(parts, f)
 	}
@@ -213,8 +224,12 @@ func pathText(p result.Path) string {
 }
 
 // paramText renders a parameter; a zero value uses the catalog's "<param>.zero"
-// text when one exists, because zero means "disabled" or "unlimited" there.
+// text when one exists, because zero means "disabled" or "unlimited" there, and a
+// string value its "<param>.<value>" text.
 func paramText(cat *i18n.Catalog, name string, v any) string {
+	if s, ok := v.(string); ok && cat.Has("param."+name+"."+s) {
+		return cat.Text("param."+name+"."+s, nil)
+	}
 	f, ok := number(v)
 	if !ok {
 		return fmt.Sprint(v)

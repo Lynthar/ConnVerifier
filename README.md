@@ -17,7 +17,8 @@ how long — each disconnect attributed to a silent timeout, a close, a reset, o
 the node closing it with a stated reason. When the node is full it says so, and
 the result says the node, not your network, set the limit.
 
-`connverifier check` measures the same path's round-trip time and its variation
+`connverifier check` first times the round trip to this host's default gateway,
+for IPv4 and IPv6 — no node needed. Then it measures the path's round-trip time and its variation
 over UDP and TCP side by side, and UDP loss — split into the way to the node and
 the way back, without synchronized clocks. Then it loads the path with TCP —
 download, upload, both — and again with QUIC (HTTP/3), and reports each load's
@@ -73,7 +74,9 @@ ulimit -n 20480
 ./bin/connverifier capacity -node @alice.invite -clients 1000 -duration 1h -yes
 ```
 
-`check` first sends 50 small packets a second over UDP and over TCP for 20 seconds
+`check` first sends 100 probes to each family's default gateway over five seconds —
+ICMP echo, or TCP handshakes on port 53, 80 or 443 when ICMP gets no answer — then
+50 small packets a second over UDP and over TCP for 20 seconds
 (`-rate`, `-duration`), then loads the path in three phases of at most 20 seconds
 (`-load-time`) over TCP, and the same three over QUIC. A phase ends once its values
 settle, so the traffic grows with the line's rate: about 1–2 GB for a whole check
@@ -84,7 +87,8 @@ has no UDP port; the UDP half then reports `UNSUPPORTED`. An older node or invit
 without load reports both load checks `UNSUPPORTED`, and a node without QUIC the
 QUIC one. `-only` runs just the checks it lists — `-only udp-baseline` is the
 20-second idle part alone — and reports the others `SKIP`; the two baselines are one
-measurement side by side, so either runs both.
+measurement side by side, so either runs both. Without an invite, `check` runs the
+gateway check and reports the checks that need a node `SKIP`.
 
 ```bash
 ./bin/connverifier check -node @alice.invite

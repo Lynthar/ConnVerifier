@@ -1,0 +1,52 @@
+Default gateway round trip and loss: attention (WARN)
+Path: IPv4 · ICMP
+Method version: 1
+Elapsed: 5.1 s
+Parameters
+  Gateway address class: private
+  Probes: 100
+  Probe packets per second: 20
+  Reply waiting time: 900 ms
+Observed
+  Probes sent: 100
+  Replies in time: 96
+  Lost (no reply in time): 4
+  Loss: 4% (95% interval 1.57–9.84%, samples: 100)
+  Round trip minimum: 1.2 ms (96 samples)
+  Round trip p50: 1.61 ms (96 samples)
+  Round trip p95: 2.02 ms (96 samples)
+  Round trip p99: too few samples (96)
+  Round trip p99.9: too few samples (96)
+  Delay variation p50 (above the minimum): 411 µs (96 samples)
+  Delay variation p95: 822 µs (96 samples)
+  Delay variation p99: too few samples (96)
+  Delay variation p99.9: too few samples (96)
+Inferred
+  - Probes without a reply within 900 ms: 4. A gateway answers ICMP with its own CPU and drops these first when busy, so the loss need not be on the forwarding path.
+
+Default gateway round trip and loss: pass (PASS)
+Path: IPv6 · TCP
+Method version: 1
+Elapsed: 10.9 s
+Parameters
+  Gateway address class: link-local
+  Probes: 100
+  Probe packets per second: 20
+  Reply waiting time: 900 ms
+  TCP port: 53
+Observed
+  Probes sent: 100
+  Replies in time: 100
+  Lost (no reply in time): 0
+  Loss: 0% (95% interval 0–3.7%, samples: 100)
+  Round trip minimum: 1.5 ms (100 samples)
+  Round trip p50: 1.91 ms (100 samples)
+  Round trip p95: 2.32 ms (100 samples)
+  Round trip p99: 2.32 ms (100 samples)
+  Round trip p99.9: too few samples (100)
+  Delay variation p50 (above the minimum): 411 µs (100 samples)
+  Delay variation p95: 822 µs (100 samples)
+  Delay variation p99: 822 µs (100 samples)
+  Delay variation p99.9: too few samples (100)
+Not proven
+  - The gateway did not answer ICMP echo, so round trips are TCP handshakes on port 53: they include the gateway's connection handling and do not compare directly with ICMP round trips.

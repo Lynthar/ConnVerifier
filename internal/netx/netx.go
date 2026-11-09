@@ -98,3 +98,6 @@ func IsClientResource(err error) bool {
 	}
 	return false
 }
+
+// IsRefused reports whether a dial failed because the peer answered with a reset.
+func IsRefused(err error) bool { return errors.Is(err, refused) }

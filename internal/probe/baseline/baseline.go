@@ -61,9 +61,10 @@ func (cfg *Config) RegisterFlags(fs *flag.FlagSet) {
 	cfg.tmax = defaultTmax
 }
 
-// Validate reports the first setting that is out of range.
+// Validate reports the first setting that is out of range. No invite at all is
+// valid here, as the check command runs without one; Run needs one.
 func (cfg Config) Validate() error {
-	if _, err := nodeclient.ResolveInvite(cfg.node); err != nil {
+	if _, err := nodeclient.ResolveInvite(cfg.node); err != nil && !errors.Is(err, nodeclient.ErrNoInvite) {
 		return err
 	}
 	switch {
@@ -115,7 +116,10 @@ func Run(ctx context.Context, cfg Config, version string) ([]result.Check, error
 	if cfg.slipLimit <= 0 {
 		cfg.slipLimit = echo.DefaultSlipLimit
 	}
-	inv, _ := nodeclient.ResolveInvite(cfg.node)
+	inv, err := nodeclient.ResolveInvite(cfg.node)
+	if err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
 	dial := cfg.dial
 	if dial == nil {
 		dial = netx.Dialer(cfg.dialTimeout, 0).DialContext
