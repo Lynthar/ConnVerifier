@@ -154,13 +154,11 @@ func shortDuration(seconds int) string {
 }
 
 func loadCatalog(lang string) *i18n.Catalog {
-	tag := i18n.Detect(os.Getenv)
-	if lang != "" {
-		l, ok := i18n.Normalize(lang)
-		if !ok {
-			invalidIf(fmt.Errorf("lang must be %s, got %q", strings.Join(i18n.Supported, " or "), lang))
-		}
-		tag = l
+	tag, ok := i18n.Normalize(lang)
+	if lang == "" {
+		tag = i18n.Detect(os.Getenv, i18n.SystemLanguage)
+	} else if !ok {
+		invalidIf(fmt.Errorf("lang must be %s, got %q", strings.Join(i18n.Supported, " or "), lang))
 	}
 	cat, err := i18n.Load(tag)
 	invalidIf(err)

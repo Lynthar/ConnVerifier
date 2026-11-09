@@ -175,7 +175,7 @@ type output struct {
 
 func (o *output) register(fs *flag.FlagSet) {
 	fs.StringVar(&o.format, "format", "text", "result format: text or json")
-	fs.StringVar(&o.lang, "lang", "", "report language: "+strings.Join(i18n.Supported, " or ")+" (default: from LC_ALL, LC_MESSAGES or LANG, else "+i18n.Default+")")
+	fs.StringVar(&o.lang, "lang", "", "report language: "+strings.Join(i18n.Supported, " or ")+" (default: from LC_ALL, LC_MESSAGES or LANG, else the macOS or Windows setting, else "+i18n.Default+")")
 }
 
 // resolve rejects unknown values rather than ignoring them and loads the catalog.
@@ -183,13 +183,11 @@ func (o *output) resolve() error {
 	if o.format != "text" && o.format != "json" {
 		return fmt.Errorf("format must be text or json, got %q", o.format)
 	}
-	lang := i18n.Detect(os.Getenv)
-	if o.lang != "" {
-		l, ok := i18n.Normalize(o.lang)
-		if !ok {
-			return fmt.Errorf("lang must be %s, got %q", strings.Join(i18n.Supported, " or "), o.lang)
-		}
-		lang = l
+	lang, ok := i18n.Normalize(o.lang)
+	if o.lang == "" {
+		lang = i18n.Detect(os.Getenv, i18n.SystemLanguage)
+	} else if !ok {
+		return fmt.Errorf("lang must be %s, got %q", strings.Join(i18n.Supported, " or "), o.lang)
 	}
 	cat, err := i18n.Load(lang)
 	if err != nil {

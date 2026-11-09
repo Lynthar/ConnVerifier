@@ -108,7 +108,8 @@ TCP 长连接容量：注意（WARN）
   - 25 条连接由节点说明原因后关闭（idle_timeout=25），不算网络掉线的证据。
 ```
 
-文本语言跟随 `LC_ALL`、`LC_MESSAGES` 或 `LANG`，支持中文和英文；`C` 与 `POSIX` 区域用英文，
+文本语言跟随 `LC_ALL`、`LC_MESSAGES` 或 `LANG`，三个都没设时跟随 macOS 或 Windows 设置里的首选语言，
+支持中文和英文；`C` 与 `POSIX` 区域用英文，
 其余一律用中文；`-lang en` 或 `-lang zh-CN` 可以覆盖。每个状态和数字是什么意思、什么时候不该信，见
 [docs/methods](docs/methods/README.md)（英文）；节点协议见 [docs/protocol.md](docs/protocol.md)。
 

@@ -127,7 +127,8 @@ Inferred
     evidence of network drops.
 ```
 
-The text is in Chinese or English, following `LC_ALL`, `LC_MESSAGES` or `LANG`;
+The text is in Chinese or English, following `LC_ALL`, `LC_MESSAGES` or `LANG`, or,
+when none is set, the preferred language in the macOS or Windows settings;
 the `C` and `POSIX` locales get English, any other language Chinese, and `-lang en`
 or `-lang zh-CN` overrides it.
 What each status and number means, and when not to trust it, is in

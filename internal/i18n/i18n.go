@@ -91,15 +91,20 @@ func Normalize(tag string) (string, bool) {
 }
 
 // Detect picks the language from LC_ALL, LC_MESSAGES and LANG, first non-empty
-// wins as in POSIX; unset or unsupported values give Default.
-func Detect(getenv func(string) string) string {
+// wins as in POSIX; only when all three are empty does it ask system (such as
+// SystemLanguage). An unsupported or empty answer gives Default.
+func Detect(getenv func(string) string, system func() string) string {
 	for _, name := range []string{"LC_ALL", "LC_MESSAGES", "LANG"} {
 		if v := getenv(name); v != "" {
-			if lang, ok := Normalize(v); ok {
-				return lang
-			}
-			return Default
+			return normalizeOrDefault(v)
 		}
+	}
+	return normalizeOrDefault(system())
+}
+
+func normalizeOrDefault(tag string) string {
+	if lang, ok := Normalize(tag); ok {
+		return lang
 	}
 	return Default
 }

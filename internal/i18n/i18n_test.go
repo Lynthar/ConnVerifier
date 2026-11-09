@@ -22,23 +22,35 @@ func TestCatalogsHaveSameKeys(t *testing.T) {
 }
 
 func TestDetect(t *testing.T) {
+	const notAsked = "\x00" // the system language must not be read when a variable is set
 	tests := []struct {
-		name string
-		env  map[string]string
-		want string
+		name   string
+		env    map[string]string
+		system string
+		want   string
 	}{
-		{"nothing set", nil, "zh-CN"},
-		{"LANG english", map[string]string{"LANG": "en_US.UTF-8"}, "en"},
-		{"LANG chinese", map[string]string{"LANG": "zh_CN.UTF-8"}, "zh-CN"},
-		{"LC_ALL wins", map[string]string{"LC_ALL": "en_GB.UTF-8", "LANG": "zh_CN.UTF-8"}, "en"},
-		{"LC_MESSAGES before LANG", map[string]string{"LC_MESSAGES": "en", "LANG": "zh_TW"}, "en"},
-		{"C locale is English", map[string]string{"LC_ALL": "C", "LANG": "zh_CN.UTF-8"}, "en"},
-		{"C.UTF-8 is English", map[string]string{"LANG": "C.UTF-8"}, "en"},
-		{"unsupported falls back", map[string]string{"LANG": "de_DE.UTF-8"}, "zh-CN"},
+		{"nothing known", nil, "", "zh-CN"},
+		{"system english", nil, "en-US", "en"},
+		{"system chinese", nil, "zh-Hans-US", "zh-CN"},
+		{"system unsupported", nil, "de-DE", "zh-CN"},
+		{"empty variable is unset", map[string]string{"LC_ALL": ""}, "en-GB", "en"},
+		{"LANG english", map[string]string{"LANG": "en_US.UTF-8"}, notAsked, "en"},
+		{"LANG chinese", map[string]string{"LANG": "zh_CN.UTF-8"}, notAsked, "zh-CN"},
+		{"LC_ALL wins", map[string]string{"LC_ALL": "en_GB.UTF-8", "LANG": "zh_CN.UTF-8"}, notAsked, "en"},
+		{"LC_MESSAGES before LANG", map[string]string{"LC_MESSAGES": "en", "LANG": "zh_TW"}, notAsked, "en"},
+		{"C locale is English", map[string]string{"LC_ALL": "C", "LANG": "zh_CN.UTF-8"}, notAsked, "en"},
+		{"C.UTF-8 is English", map[string]string{"LANG": "C.UTF-8"}, notAsked, "en"},
+		{"unsupported variable falls back", map[string]string{"LANG": "de_DE.UTF-8"}, notAsked, "zh-CN"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := Detect(func(k string) string { return tt.env[k] }); got != tt.want {
+			system := func() string {
+				if tt.system == notAsked {
+					t.Fatal("system language read although a locale variable is set")
+				}
+				return tt.system
+			}
+			if got := Detect(func(k string) string { return tt.env[k] }, system); got != tt.want {
 				t.Fatalf("Detect = %q, want %q", got, tt.want)
 			}
 		})
