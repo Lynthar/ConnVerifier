@@ -62,8 +62,9 @@ ulimit -n 20480
 ```
 
 `check` 先在 UDP 和 TCP 上各发每秒 50 个小包，持续 20 秒（`-rate`、`-duration`），再用 TCP
-分三段把路径跑满，每段至多 20 秒、500 MB（`-load-time`、`-load-mb`），然后用 QUIC 再跑同样的三段；
-开跑前先说明最多会用掉多少流量。每段超过 500 MB 时要确认，和 `capacity` 一样。UDP 探测出现之前
+分三段把路径跑满，每段至多 20 秒（`-load-time`），然后用 QUIC 再跑同样的三段。一段的数值稳定了就结束，
+所以流量随线路速率增长：100 Mbit/s 下整次检查约 1–2 GB，1 Gbit/s 下 10–20 GB，每段每个方向至多
+25 000 MB（`-load-mb`）。开跑前先说明最多会用掉多少流量并请你确认，和 `capacity` 一样。UDP 探测出现之前
 建的邀请串里没有 UDP 端口，这时 UDP 那一项报 `UNSUPPORTED`；不支持负载的旧节点或邀请串，两项负载
 都报 `UNSUPPORTED`，节点不提供 QUIC 时 QUIC 那一项报 `UNSUPPORTED`。`-only` 只跑列出的检查——
 `-only udp-baseline` 就是单跑 20 秒的空闲部分——其余报 `SKIP`；两项基线是同一次并排测量，选哪一项都两项一起跑。
@@ -112,7 +113,7 @@ TCP 长连接容量：注意（WARN）
 [docs/methods](docs/methods/README.md)（英文）；节点协议见 [docs/protocol.md](docs/protocol.md)。
 
 全部走旗标。`check`：`-node`、`-only`（全部）、`-rate`（50）、`-duration`（20s）、`-dial-timeout`（5s）、
-`-load-interval`（1s）、`-load-time`（20s）、`-load-mb`（500）、`-format`、`-lang`、`-yes`。`capacity`：`-node`、`-clients`（1000）、`-start-rate`（100）、`-heartbeat`（30s）、
+`-load-interval`（1s）、`-load-time`（20s）、`-load-mb`（25000）、`-format`、`-lang`、`-yes`。`capacity`：`-node`、`-clients`（1000）、`-start-rate`（100）、`-heartbeat`（30s）、
 `-dial-timeout`（5s）、`-io-timeout`（5s）、`-min-backoff`（500ms）、`-max-backoff`（1m）、
 `-duration`（0＝直到中断）、`-log-drops`、`-format`（text）、`-lang`、`-yes`。`serve`：
 `-listen`（:7443）、`-listen-udp`（同 `-listen`）、`-listen-quic`（`-listen` 的端口 + 1；`off` 关闭）、
@@ -120,7 +121,7 @@ TCP 长连接容量：注意（WARN）
 `-max-sessions`（64）、`-max-load-sessions`（1）、`-log-connections`。`invite create`：`-label`、`-addr`（可重复）、
 `-udp-port`（第一个 `-addr` 的端口）、`-max-sessions`（2）、`-max-connections`（20000）、
 `-max-dial-rate`（1000）、`-max-stamp-rate`（100）、`-max-duration`（24h）、`-max-idle`（1h）、
-`-max-load-mb`（2000）、`-max-load-mb-per-day`（20000）、`-max-load-connections`（48）。
+`-max-load-mb`（10000）、`-max-load-mb-per-day`（100000）、`-max-load-connections`（48）。
 
 两端都不开 TCP keepalive：keepalive 会不断刷新 NAT 映射，那样测出来的结果永远是「NAT 很稳」。
 
@@ -129,7 +130,7 @@ TCP 长连接容量：注意（WARN）
 - **UDP 带宽就是 QUIC 的带宽。** 用 QUIC 自己的拥塞控制测，不靠灌包；比 TCP 低也不能证明网络在
   限 UDP。没有 STUN、没有 DNS，UDP 只用一种包长；时延只有往返，从不报单向。goodput 是到一个节点的：瓶颈是你的宽带还是节点机房的上行，不作判定。
 - **macOS 上 QUIC 会先卡在 Mac 自己身上。** macOS 把收到的 UDP 一个包一个包地交给 socket，
-  每条 QUIC 连接一个 socket 时，内核会封住 `quic-load`，多出来的排在内核里：测过的那台 Mac 约 1.4 Gbit/s，旧一些的会更低。
+  每条 QUIC 连接一个 socket 时，内核给 `quic-load` 封了顶，多出来的排在内核里：测过的那台 Mac 约 1.4 Gbit/s，旧一些的会更低。
   路径更快时，QUIC 的 goodput 是 Mac 的上限，跑满时延里也多出几十毫秒这段排队；同一次检查里
   对照 `tcp-load` 看出这种情形时，`quic-load` 会加一条注记。`tcp-load` 不受影响。
 - **JSON 的 schema 还是 `v0`。** 不同构建之间仍可能变；要解析就固定一个构建，别解析文本。
