@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Lynthar/ConnVerifier/internal/i18n"
+	"github.com/Lynthar/ConnVerifier/internal/netenv"
 	"github.com/Lynthar/ConnVerifier/internal/node"
 	"github.com/Lynthar/ConnVerifier/internal/probe/baseline"
 	"github.com/Lynthar/ConnVerifier/internal/probe/capacity"
@@ -220,6 +221,7 @@ func newRun(started, ended time.Time, checks ...result.Check) result.Run {
 		Started:   started.UTC(),
 		Ended:     ended.UTC(),
 		ElapsedMs: ended.Sub(started).Milliseconds(),
+		Host:      netenv.Host(checks),
 		Checks:    checks,
 	}
 }

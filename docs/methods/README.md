@@ -44,3 +44,26 @@ changes that require a new **method version**.
 
 A poor network is never reported as `ERROR`, and a tool failure is never reported
 as a poor network.
+
+## This host
+
+Before the checks, a result names the kind of interface the route to the node
+leaves by, once for each address family the checks ran on (`host.interfaces` in the
+JSON). When the run ends, the tool asks the kernel for that route the way a
+connection would get it — a UDP socket connected to the node's address, which sends
+nothing — and classifies the interface holding the source address it chose:
+
+| Kind | Linux | macOS | Windows |
+|---|---|---|---|
+| `wifi` | `phy80211` or `wireless` in sysfs, or `DEVTYPE=wlan` | functional type Wi-Fi | `IfType` 71 |
+| `wired` | Ethernet backed by a device | functional type wired | `IfType` 6 |
+| `tunnel` | tun or tap, WireGuard, SIT, IP-in-IP and GRE over IPv4 or IPv6 | `utun`, `ipsec`, `gif`, `stf` | `IfType` 131, or 53 (Wintun) |
+| `ppp` | link type PPP | `ppp` | `IfType` 23 |
+| `other` | anything else: bridges, veth, VLANs, loopback | anything else | anything else |
+| `unknown` | the interface or its type could not be read | the same | the same |
+
+Over Wi-Fi, the wireless hop's delay and loss are part of every result. Over a
+tunnel, what is measured is the tunnel's path, not the bare connection. A PPP link
+is broadband dial-up or a VPN, which the host cannot tell apart. None of this
+changes a status. Interface names, addresses, MAC addresses and SSIDs are never
+recorded.

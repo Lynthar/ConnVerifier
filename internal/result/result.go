@@ -53,7 +53,23 @@ type Run struct {
 	Started   time.Time `json:"started"`
 	Ended     time.Time `json:"ended"`
 	ElapsedMs int64     `json:"elapsed_ms"`
+	Host      *Host     `json:"host,omitempty"`
 	Checks    []Check   `json:"checks"`
+}
+
+// Host holds what this machine tells about itself, apart from what any check
+// measures: for each address family the checks ran on, the kind of interface the
+// route to the node leaves by. Names, addresses and SSIDs are never recorded.
+type Host struct {
+	Interfaces []Interface `json:"interfaces"`
+}
+
+// Interface is one family's route out: Family is "ipv4", "ipv6" or "" when the
+// node's address could not be resolved; Kind is wifi, wired, tunnel, ppp, other
+// or unknown.
+type Interface struct {
+	Family string `json:"family"`
+	Kind   string `json:"kind"`
 }
 
 type Tool struct {

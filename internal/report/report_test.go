@@ -1,6 +1,46 @@
 package report
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/Lynthar/ConnVerifier/internal/i18n"
+	"github.com/Lynthar/ConnVerifier/internal/result"
+)
+
+// Every interface kind renders in every catalog, the host section comes before the
+// first check, and a note shared by two families is printed once.
+func TestTextHost(t *testing.T) {
+	var ifs []result.Interface
+	for _, kind := range []string{"wifi", "wired", "tunnel", "ppp", "other", "unknown"} {
+		ifs = append(ifs, result.Interface{Family: "ipv4", Kind: kind})
+	}
+	ifs = append(ifs, result.Interface{Family: "ipv6", Kind: "wifi"}, result.Interface{Kind: "unknown"})
+	run := result.Run{
+		Host:   &result.Host{Interfaces: ifs},
+		Checks: []result.Check{{ID: "udp-baseline", Status: result.Skip, Warnings: []result.Message{{Key: "check.not_selected"}}}},
+	}
+	for _, lang := range i18n.Supported {
+		cat, err := i18n.Load(lang)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var b strings.Builder
+		if err := Text(&b, run, cat); err != nil {
+			t.Fatal(err)
+		}
+		out := b.String()
+		if strings.Contains(out, "host.") {
+			t.Errorf("%s: raw key in\n%s", lang, out)
+		}
+		if !strings.HasPrefix(out, cat.Text("section.host", nil)+"\n") || !strings.Contains(out, "\n\n"+cat.Text("check.udp-baseline.title", nil)) {
+			t.Errorf("%s: host section is not first, apart from the checks:\n%s", lang, out)
+		}
+		if n := strings.Count(out, cat.Text("host.note.wifi", nil)); n != 1 {
+			t.Errorf("%s: Wi-Fi note printed %d times, want once:\n%s", lang, n, out)
+		}
+	}
+}
 
 func TestFormatMs(t *testing.T) {
 	tests := []struct {

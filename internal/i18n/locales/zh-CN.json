@@ -89,6 +89,20 @@
   "metric.rejected.other": "节点拒绝（其他原因）",
   "metric.drops.node_closed": "掉线（节点说明原因后关闭）",
 
+  "section.host": "本机",
+
+  "host.interface": "到节点的接口",
+  "host.interface_family": "到节点的接口（{family}）",
+  "host.kind.wifi": "Wi-Fi",
+  "host.kind.wired": "有线",
+  "host.kind.tunnel": "隧道",
+  "host.kind.ppp": "PPP（拨号或 VPN）",
+  "host.kind.other": "其他",
+  "host.kind.unknown": "识别不了",
+  "host.note.wifi": "到节点的路由走 Wi-Fi：无线这一段的时延与丢包都算在结果里。",
+  "host.note.tunnel": "到节点的路由走隧道接口：测的是隧道这条路，不是直连的宽带。",
+  "host.note.ppp": "到节点的路由走 PPP 接口：宽带拨号时测的就是宽带；如果是 VPN，测的是隧道这条路。",
+
   "section.node": "节点自报",
 
   "node.label": "名称",

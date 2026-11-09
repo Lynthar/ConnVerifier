@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,8 +27,11 @@ func JSON(w io.Writer, r result.Run) error {
 // columns: mixed-width CJK text would misalign them in many terminals.
 func Text(w io.Writer, r result.Run, cat *i18n.Catalog) error {
 	var b strings.Builder
+	if r.Host != nil {
+		writeHost(&b, r.Host, cat)
+	}
 	for i, c := range r.Checks {
-		if i > 0 {
+		if i > 0 || r.Host != nil {
 			b.WriteString("\n")
 		}
 		writeCheck(&b, c, cat)
@@ -173,13 +177,34 @@ func writeNode(b *strings.Builder, field func(indent, label, value string), n *r
 	}
 }
 
+// writeHost renders what this host tells about its route to the node. It comes
+// before the checks, so a Wi-Fi hop or a tunnel is known before any number is read.
+func writeHost(b *strings.Builder, h *result.Host, cat *i18n.Catalog) {
+	b.WriteString(cat.Text("section.host", nil) + "\n")
+	var notes []string
+	for _, ifc := range h.Interfaces {
+		label := cat.Text("host.interface", nil)
+		if f := familyText(ifc.Family); f != "" {
+			label = cat.Text("host.interface_family", map[string]any{"family": f})
+		}
+		b.WriteString("  " + cat.Text("line.field", map[string]any{"label": label, "value": cat.Text("host.kind."+ifc.Kind, nil)}) + "\n")
+		if key := "host.note." + ifc.Kind; cat.Has(key) && !slices.Contains(notes, key) {
+			notes = append(notes, key)
+		}
+	}
+	for _, key := range notes {
+		b.WriteString("  - " + cat.Text(key, nil) + "\n")
+	}
+}
+
+func familyText(family string) string {
+	return map[string]string{"ipv4": "IPv4", "ipv6": "IPv6"}[family]
+}
+
 func pathText(p result.Path) string {
 	parts := []string{p.Node}
-	switch p.Family {
-	case "ipv4":
-		parts = append(parts, "IPv4")
-	case "ipv6":
-		parts = append(parts, "IPv6")
+	if f := familyText(p.Family); f != "" {
+		parts = append(parts, f)
 	}
 	if p.Protocol != "" {
 		parts = append(parts, strings.ToUpper(p.Protocol))

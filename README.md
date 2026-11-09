@@ -127,6 +127,10 @@ Inferred
     evidence of network drops.
 ```
 
+Before the checks, the result names the kind of interface the route to the node
+leaves by — Wi-Fi, wired, a tunnel, PPP or other — with a note when Wi-Fi or a tunnel
+is part of what is measured ([how it is found](docs/methods/README.md#this-host)).
+
 The text is in Chinese or English, following `LC_ALL`, `LC_MESSAGES` or `LANG`, or,
 when none is set, the preferred language in the macOS or Windows settings;
 the `C` and `POSIX` locales get English, any other language Chinese, and `-lang en`

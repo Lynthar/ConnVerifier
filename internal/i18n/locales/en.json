@@ -89,6 +89,20 @@
   "metric.rejected.other": "Rejected by the node (other reason)",
   "metric.drops.node_closed": "Drops (closed by the node, with a reason)",
 
+  "section.host": "This host",
+
+  "host.interface": "Interface to the node",
+  "host.interface_family": "Interface to the node ({family})",
+  "host.kind.wifi": "Wi-Fi",
+  "host.kind.wired": "Wired",
+  "host.kind.tunnel": "Tunnel",
+  "host.kind.ppp": "PPP (dial-up or VPN)",
+  "host.kind.other": "Other",
+  "host.kind.unknown": "Not identified",
+  "host.note.wifi": "The route to the node leaves by Wi-Fi: the wireless hop's delay and loss are part of every result.",
+  "host.note.tunnel": "The route to the node leaves by a tunnel interface: what is measured is the tunnel's path, not the bare connection.",
+  "host.note.ppp": "The route to the node leaves by a PPP interface: on broadband dial-up that is the connection itself; on a VPN it is the tunnel's path.",
+
   "section.node": "Reported by the node",
 
   "node.label": "Name",
