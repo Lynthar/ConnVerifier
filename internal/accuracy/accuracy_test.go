@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Lynthar/ConnVerifier/internal/probe/baseline"
+	"github.com/Lynthar/ConnVerifier/internal/probe/load"
 	"github.com/Lynthar/ConnVerifier/internal/result"
 )
 
@@ -183,12 +185,17 @@ func (l *lab) shallow(mbit int) {
 // scenarios that judge the idle checks only.
 var baselineOnly = []string{"-load-time", "1s", "-load-mb", "1"}
 
+// nodeChecks are the checks the scenarios judge; the gateway and DNS checks are
+// left out, as they would add seconds to every run.
+var nodeChecks = []string{baseline.UDPID, baseline.TCPID, load.TCPID, load.QUICID}
+
 // check runs connverifier check from the client namespace with args and returns
 // the UDP and TCP results and the two loads, tcp-load then quic-load; prefix
 // wraps the command (such as a CPU-limited scope).
 func (l *lab) check(args []string, prefix ...string) (udp, tcp result.Check, loads []result.Check) {
 	l.t.Helper()
-	args = append(append(append(append(prefix, "ip", "netns", "exec", clientNS), l.clientAs...), bin, "check", "-format", "json", "-yes"), args...)
+	args = append(append(append(append(prefix, "ip", "netns", "exec", clientNS), l.clientAs...),
+		bin, "check", "-format", "json", "-yes", "-only", strings.Join(nodeChecks, ",")), args...)
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Env = append(os.Environ(), "CONNVERIFIER_NODE="+l.invite)
 	var stdout, stderr bytes.Buffer
@@ -196,10 +203,20 @@ func (l *lab) check(args []string, prefix ...string) (udp, tcp result.Check, loa
 	cmd.Run()
 	l.stderr = stderr.String()
 	var run result.Run
-	if err := json.Unmarshal(stdout.Bytes(), &run); err != nil || len(run.Checks) != 4 {
+	err := json.Unmarshal(stdout.Bytes(), &run)
+	byID := map[string]result.Check{}
+	for _, c := range run.Checks {
+		byID[c.ID] = c
+	}
+	for _, id := range nodeChecks {
+		if _, ok := byID[id]; err == nil && !ok {
+			err = fmt.Errorf("no %s result", id)
+		}
+	}
+	if err != nil {
 		l.t.Fatalf("check output: %v\n%s\n%s", err, stdout.String(), stderr.String())
 	}
-	return run.Checks[0], run.Checks[1], run.Checks[2:]
+	return byID[baseline.UDPID], byID[baseline.TCPID], []result.Check{byID[load.TCPID], byID[load.QUICID]}
 }
 
 // loadKinds are the two loads of a check, in its order, with their goodput

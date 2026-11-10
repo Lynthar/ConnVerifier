@@ -111,7 +111,7 @@ func TestTextHasNoRawKeys(t *testing.T) {
 		c.Warnings = append(c.Warnings, msg("gateway.unsupported.no_routes", map[string]any{"error": "x"}))
 	})
 	run := result.Run{Checks: checks}
-	rawKey := regexp.MustCompile(`\b(gateway|metric|param|label|section|status|check|line|value)\.[A-Za-z_]`)
+	rawKey := regexp.MustCompile(`\b(gateway|class|metric|param|label|section|status|check|line|value)\.[A-Za-z_]`)
 	for _, lang := range i18n.Supported {
 		cat, err := i18n.Load(lang)
 		if err != nil {

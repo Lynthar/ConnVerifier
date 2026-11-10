@@ -64,10 +64,11 @@ func TestSelection(t *testing.T) {
 		{"udp-baseline", invite, true, []string{"udp-baseline"}, 0},
 		{" tcp-load , quic-load ", invite, true, []string{"tcp-load", "quic-load"}, 2},
 		{"quic-load,", invite, true, []string{"quic-load"}, 1},
-		{"tcp-load,dns", invite, false, nil, 0},
+		{"tcp-load,ports", invite, false, nil, 0},
 		{"TCP-load", invite, false, nil, 0},
 		{"", "", true, checkIDs, 0},
 		{"gateway,tcp-load", "", true, []string{"gateway", "tcp-load"}, 0},
+		{"dns", "", true, []string{"dns"}, 0},
 		{"udp-baseline,tcp-load", "", false, nil, 0},
 		{"gateway", "cvi1_not-an-invite", true, []string{"gateway"}, 0},
 	}
@@ -108,7 +109,7 @@ func TestCheckWithoutInvite(t *testing.T) {
 		got = append(got, c.ID+":"+c.Warnings[0].Key)
 	}
 	want := []string{
-		"gateway:check.not_selected", "gateway:check.not_selected",
+		"gateway:check.not_selected", "gateway:check.not_selected", "dns:check.not_selected", "dns:check.not_selected",
 		"udp-baseline:check.no_invite", "tcp-baseline:check.no_invite",
 		"tcp-load:check.no_invite", "quic-load:check.not_selected",
 	}

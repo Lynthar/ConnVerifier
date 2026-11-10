@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/Lynthar/ConnVerifier/internal/probe/baseline"
+	"github.com/Lynthar/ConnVerifier/internal/probe/dns"
 	"github.com/Lynthar/ConnVerifier/internal/probe/gateway"
 	"github.com/Lynthar/ConnVerifier/internal/probe/load"
 	"github.com/Lynthar/ConnVerifier/internal/probe/nodeclient"
@@ -27,9 +28,9 @@ var (
 
 // checkIDs lists the check command's checks in the order Check runs them; the
 // first nodeFree need no node.
-var checkIDs = []string{gateway.ID, baseline.UDPID, baseline.TCPID, load.TCPID, load.QUICID}
+var checkIDs = []string{gateway.ID, dns.ID, baseline.UDPID, baseline.TCPID, load.TCPID, load.QUICID}
 
-const nodeFree = 1
+const nodeFree = 2
 
 // Config selects the checks Check runs.
 type Config struct {
@@ -104,8 +105,8 @@ func Confirm(in io.Reader, out io.Writer, interactive, yes bool, notice, prompt 
 	return ErrDeclined
 }
 
-// Check runs the check command's selected checks: the gateway, the idle
-// baseline, then the load over TCP, then over QUIC. None overlaps another — a
+// Check runs the check command's selected checks: the gateway, the resolvers, the
+// idle baseline, then the load over TCP, then over QUIC. None overlaps another — a
 // path under load is not idle, and two loads share one bottleneck — and each load
 // compares its round trips with the baseline's, quic-load its uploads also with
 // tcp-load's. The two baselines are one measurement, side by side in one session:
@@ -114,11 +115,20 @@ func Confirm(in io.Reader, out io.Writer, interactive, yes bool, notice, prompt 
 // invalid.
 func Check(ctx context.Context, cfg Config, base baseline.Config, ld load.Config, version string) ([]result.Check, error) {
 	var checks []result.Check
-	if cfg.Selected(gateway.ID) {
-		checks = gateway.Run(ctx, gateway.Config{})
-	} else {
+	for _, h := range []struct {
+		id            string
+		methodVersion int
+		run           func(context.Context) []result.Check
+	}{
+		{gateway.ID, gateway.MethodVersion, func(ctx context.Context) []result.Check { return gateway.Run(ctx, gateway.Config{}) }},
+		{dns.ID, dns.MethodVersion, func(ctx context.Context) []result.Check { return dns.Run(ctx, dns.Config{}) }},
+	} {
+		if cfg.Selected(h.id) {
+			checks = append(checks, h.run(ctx)...)
+			continue
+		}
 		for _, family := range []string{"ipv4", "ipv6"} {
-			checks = append(checks, skipped(gateway.ID, gateway.MethodVersion, result.Path{Family: family}, "check.not_selected"))
+			checks = append(checks, skipped(h.id, h.methodVersion, result.Path{Family: family}, "check.not_selected"))
 		}
 	}
 	node, _, _ := base.Shared()

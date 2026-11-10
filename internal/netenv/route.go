@@ -73,8 +73,8 @@ func interfaceWith(addr netip.Addr) (net.Interface, bool) {
 const routeTimeout = 2 * time.Second
 
 // Host is the result's host object: for each address family the checks ran on,
-// the kind of interface the route to their node leaves by, or nil when no check
-// ran on a node. It keeps its own deadline, so it still answers after the run was interrupted.
+// the kind of interface the route to their node leaves by, or nil when none ran on
+// a node. It keeps its own deadline, so it answers after an interrupted run too.
 func Host(checks []result.Check) *result.Host {
 	ctx, cancel := context.WithTimeout(context.Background(), routeTimeout)
 	defer cancel()

@@ -225,10 +225,10 @@ func pathText(p result.Path) string {
 
 // paramText renders a parameter; a zero value uses the catalog's "<param>.zero"
 // text when one exists, because zero means "disabled" or "unlimited" there, and a
-// string value its "<param>.<value>" text.
+// "_class" parameter names an address class, shown in cat's language.
 func paramText(cat *i18n.Catalog, name string, v any) string {
-	if s, ok := v.(string); ok && cat.Has("param."+name+"."+s) {
-		return cat.Text("param."+name+"."+s, nil)
+	if s, ok := v.(string); ok && strings.HasSuffix(name, "_class") {
+		return cat.Text("class."+s, nil)
 	}
 	f, ok := number(v)
 	if !ok {

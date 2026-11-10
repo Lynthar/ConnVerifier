@@ -31,9 +31,10 @@ import (
 const usage = `usage: connverifier <command> [flags]
 
 commands:
-  check      measure round trip and loss to the default gateway, then round
-             trip, its variation and UDP loss to a node, idle and with the path
-             loaded over TCP and over QUIC, and the goodput of each load
+  check      measure round trip and loss to the default gateway and the DNS
+             resolvers, then round trip, its variation and UDP loss to a node,
+             idle and with the path loaded over TCP and over QUIC, and the
+             goodput of each load
   capacity   hold N long-lived TCP connections against a node and report drops
   serve      run a node that clients measure against
   invite     create, list or revoke the invites a node accepts

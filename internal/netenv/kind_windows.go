@@ -9,7 +9,8 @@ import (
 )
 
 func kindOf(ifi net.Interface) string {
-	aa, err := adapters()
+	aa, err := adapters(windows.GAA_FLAG_SKIP_UNICAST | windows.GAA_FLAG_SKIP_ANYCAST | windows.GAA_FLAG_SKIP_MULTICAST |
+		windows.GAA_FLAG_SKIP_DNS_SERVER | windows.GAA_FLAG_SKIP_FRIENDLY_NAME)
 	if err != nil {
 		return KindUnknown
 	}
@@ -43,16 +44,14 @@ func kindOfIfType(t uint32) string {
 	return KindOther
 }
 
-// adapters lists the adapters with only the fields kindOf reads, growing the
-// buffer for as long as Windows asks for a larger one.
-func adapters() (*windows.IpAdapterAddresses, error) {
-	const skip = windows.GAA_FLAG_SKIP_UNICAST | windows.GAA_FLAG_SKIP_ANYCAST | windows.GAA_FLAG_SKIP_MULTICAST |
-		windows.GAA_FLAG_SKIP_DNS_SERVER | windows.GAA_FLAG_SKIP_FRIENDLY_NAME
+// adapters lists the adapters, leaving out what flags skip, growing the buffer for
+// as long as Windows asks for a larger one.
+func adapters(flags uint32) (*windows.IpAdapterAddresses, error) {
 	size := uint32(15000)
 	for {
 		b := make([]byte, size)
 		aa := (*windows.IpAdapterAddresses)(unsafe.Pointer(&b[0]))
-		err := windows.GetAdaptersAddresses(windows.AF_UNSPEC, skip, 0, aa, &size)
+		err := windows.GetAdaptersAddresses(windows.AF_UNSPEC, flags, 0, aa, &size)
 		switch {
 		case err == nil && size == 0:
 			return nil, nil

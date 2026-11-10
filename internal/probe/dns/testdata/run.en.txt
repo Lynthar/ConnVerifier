@@ -1,0 +1,54 @@
+DNS resolver round trip and answers: pass (PASS)
+Path: IPv4 · UDP
+Method version: 1
+Elapsed: 1.91 s
+Parameters
+  Queries: 20
+  Probe packets per second: 10
+  Reply waiting time: 2 s
+  Resolver (place in this host's list): 1
+  Resolver address class: private
+Observed
+  Probes sent: 20
+  Replies in time: 20
+  Lost (no reply in time): 0
+  Loss: 0% (95% interval 0–16.1%, samples: 20)
+  Answers with an error code: 0
+  Round trip minimum: 3 ms (20 samples)
+  Round trip p50: 3.62 ms (20 samples)
+  Round trip p95: 4.24 ms (20 samples)
+  Round trip p99: too few samples (20)
+  Round trip p99.9: too few samples (20)
+  Delay variation p50 (above the minimum): 622 µs (20 samples)
+  Delay variation p95: 1.24 ms (20 samples)
+  Delay variation p99: too few samples (20)
+  Delay variation p99.9: too few samples (20)
+
+DNS resolver round trip and answers: attention (WARN)
+Path: IPv6 · UDP
+Method version: 1
+Elapsed: 3.9 s
+Parameters
+  Queries: 20
+  Probe packets per second: 10
+  Reply waiting time: 2 s
+  Resolver (place in this host's list): 2
+  Resolver address class: link-local
+Observed
+  Probes sent: 20
+  Replies in time: 18
+  Lost (no reply in time): 2
+  Loss: 10% (95% interval 2.79–30.1%, samples: 20)
+  Answers with an error code: 1
+  Round trip minimum: 4 ms (18 samples)
+  Round trip p50: 4.62 ms (18 samples)
+  Round trip p95: too few samples (18)
+  Round trip p99: too few samples (18)
+  Round trip p99.9: too few samples (18)
+  Delay variation p50 (above the minimum): 622 µs (18 samples)
+  Delay variation p95: too few samples (18)
+  Delay variation p99: too few samples (18)
+  Delay variation p99.9: too few samples (18)
+Inferred
+  - Queries without an answer within 2 s: 2.
+  - Answers with an error code: 1 (SERVFAIL ×1). The resolver answered but did not give the root zone's NS.

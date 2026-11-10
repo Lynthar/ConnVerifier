@@ -1,0 +1,243 @@
+{
+  "schema": "connverifier.result/v0",
+  "tool": {
+    "name": "connverifier",
+    "version": "v0.0.0-golden",
+    "go": "go1.27.0",
+    "os": "linux",
+    "arch": "amd64"
+  },
+  "run_id": "golden",
+  "started": "2026-01-01T00:00:00Z",
+  "ended": "2026-01-01T00:00:05.808Z",
+  "elapsed_ms": 5808,
+  "checks": [
+    {
+      "id": "dns",
+      "method_version": 1,
+      "status": "PASS",
+      "path": {
+        "node": "",
+        "family": "ipv4",
+        "protocol": "udp"
+      },
+      "params": {
+        "queries": 20,
+        "rate_per_s": 10,
+        "reply_wait_ms": 2000,
+        "resolver": 1,
+        "resolver_class": "private"
+      },
+      "elapsed_ms": 1906,
+      "metrics": [
+        {
+          "id": "sent",
+          "unit": "count",
+          "value": 20
+        },
+        {
+          "id": "replies",
+          "unit": "count",
+          "value": 20
+        },
+        {
+          "id": "lost",
+          "unit": "count",
+          "value": 0
+        },
+        {
+          "id": "loss",
+          "unit": "%",
+          "value": 0,
+          "low": 0,
+          "high": 16.1125,
+          "samples": 20
+        },
+        {
+          "id": "error_replies",
+          "unit": "count",
+          "value": 0
+        },
+        {
+          "id": "rtt.min",
+          "unit": "ms",
+          "value": 3,
+          "samples": 20
+        },
+        {
+          "id": "rtt.p50",
+          "unit": "ms",
+          "value": 3.622,
+          "samples": 20
+        },
+        {
+          "id": "rtt.p95",
+          "unit": "ms",
+          "value": 4.244,
+          "samples": 20
+        },
+        {
+          "id": "rtt.p99",
+          "unit": "ms",
+          "samples": 20,
+          "insufficient": true
+        },
+        {
+          "id": "rtt.p99_9",
+          "unit": "ms",
+          "samples": 20,
+          "insufficient": true
+        },
+        {
+          "id": "pdv.p50",
+          "unit": "ms",
+          "value": 0.622,
+          "samples": 20
+        },
+        {
+          "id": "pdv.p95",
+          "unit": "ms",
+          "value": 1.244,
+          "samples": 20
+        },
+        {
+          "id": "pdv.p99",
+          "unit": "ms",
+          "samples": 20,
+          "insufficient": true
+        },
+        {
+          "id": "pdv.p99_9",
+          "unit": "ms",
+          "samples": 20,
+          "insufficient": true
+        }
+      ]
+    },
+    {
+      "id": "dns",
+      "method_version": 1,
+      "status": "WARN",
+      "path": {
+        "node": "",
+        "family": "ipv6",
+        "protocol": "udp"
+      },
+      "params": {
+        "queries": 20,
+        "rate_per_s": 10,
+        "reply_wait_ms": 2000,
+        "resolver": 2,
+        "resolver_class": "link_local"
+      },
+      "elapsed_ms": 3902,
+      "metrics": [
+        {
+          "id": "sent",
+          "unit": "count",
+          "value": 20
+        },
+        {
+          "id": "replies",
+          "unit": "count",
+          "value": 18
+        },
+        {
+          "id": "lost",
+          "unit": "count",
+          "value": 2
+        },
+        {
+          "id": "loss",
+          "unit": "%",
+          "value": 10,
+          "low": 2.7866,
+          "high": 30.1034,
+          "samples": 20
+        },
+        {
+          "id": "error_replies",
+          "unit": "count",
+          "value": 1
+        },
+        {
+          "id": "rtt.min",
+          "unit": "ms",
+          "value": 4,
+          "samples": 18
+        },
+        {
+          "id": "rtt.p50",
+          "unit": "ms",
+          "value": 4.622,
+          "samples": 18
+        },
+        {
+          "id": "rtt.p95",
+          "unit": "ms",
+          "samples": 18,
+          "insufficient": true
+        },
+        {
+          "id": "rtt.p99",
+          "unit": "ms",
+          "samples": 18,
+          "insufficient": true
+        },
+        {
+          "id": "rtt.p99_9",
+          "unit": "ms",
+          "samples": 18,
+          "insufficient": true
+        },
+        {
+          "id": "pdv.p50",
+          "unit": "ms",
+          "value": 0.622,
+          "samples": 18
+        },
+        {
+          "id": "pdv.p95",
+          "unit": "ms",
+          "samples": 18,
+          "insufficient": true
+        },
+        {
+          "id": "pdv.p99",
+          "unit": "ms",
+          "samples": 18,
+          "insufficient": true
+        },
+        {
+          "id": "pdv.p99_9",
+          "unit": "ms",
+          "samples": 18,
+          "insufficient": true
+        }
+      ],
+      "inferences": [
+        {
+          "key": "dns.inference.unanswered",
+          "params": {
+            "count": 2,
+            "wait_ms": 2000
+          },
+          "basis": [
+            "lost",
+            "loss"
+          ]
+        },
+        {
+          "key": "dns.inference.error_replies",
+          "params": {
+            "codes": "SERVFAIL ×1",
+            "count": 1
+          },
+          "basis": [
+            "error_replies"
+          ]
+        }
+      ]
+    }
+  ]
+}

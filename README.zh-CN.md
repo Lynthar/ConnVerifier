@@ -14,7 +14,7 @@
 每一次掉线都归因到悄悄超时、被关闭、被重置，还是节点说明原因后关闭。节点满了会直说，
 结果也会写明上限是节点定的，不是你的网络。
 
-`connverifier check` 先测本机到默认网关的往返，IPv4、IPv6 各一组，不需要节点。然后在同一条路径上并排测 UDP 和 TCP 的往返时延及其变化，以及 UDP 丢包——
+`connverifier check` 先测本机到默认网关的往返（IPv4、IPv6 各一组）和到每个 DNS 解析器的往返，不需要节点。然后在同一条路径上并排测 UDP 和 TCP 的往返时延及其变化，以及 UDP 丢包——
 不用对时，也能把丢包拆成去程和回程。接着先用 TCP、再用 QUIC（HTTP/3）把路径跑满——下行、上行、
 双向——分别报 goodput，以及同样的往返时延在跑满时涨了多少，响应度按 IETF 草案 `draft-ietf-ippm-responsiveness` 的口径给出。
 
@@ -62,14 +62,14 @@ ulimit -n 20480
 ```
 
 `check` 先向每个地址族的默认网关在 5 秒内发 100 个探测——ICMP 回显，网关不回 ICMP 时改用 TCP 53、80 或 443
-端口的握手——再在 UDP 和 TCP 上各发每秒 50 个小包，持续 20 秒（`-rate`、`-duration`），再用 TCP
+端口的握手——向每个解析器在 2 秒内发 20 个查询，再在 UDP 和 TCP 上各发每秒 50 个小包，持续 20 秒（`-rate`、`-duration`），再用 TCP
 分三段把路径跑满，每段至多 20 秒（`-load-time`），然后用 QUIC 再跑同样的三段。一段的数值稳定了就结束，
 所以流量随线路速率增长：100 Mbit/s 下整次检查约 1–2 GB，1 Gbit/s 下 10–20 GB，每段每个方向至多
 25 000 MB（`-load-mb`）。开跑前先说明最多会用掉多少流量并请你确认，和 `capacity` 一样。UDP 探测出现之前
 建的邀请串里没有 UDP 端口，这时 UDP 那一项报 `UNSUPPORTED`；不支持负载的旧节点或邀请串，两项负载
 都报 `UNSUPPORTED`，节点不提供 QUIC 时 QUIC 那一项报 `UNSUPPORTED`。`-only` 只跑列出的检查——
 `-only udp-baseline` 就是单跑 20 秒的空闲部分——其余报 `SKIP`；两项基线是同一次并排测量，选哪一项都两项一起跑。
-没有邀请串时 `check` 只跑网关这一项，要节点的几项报 `SKIP`。
+没有邀请串时 `check` 只跑网关和 DNS 两项，要节点的几项报 `SKIP`。
 
 ```bash
 ./bin/connverifier check -node @alice.invite
